@@ -337,6 +337,50 @@
   margin-right: 4px;
 }
 
+.cart-item-flash-sale-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #D70018 0%, #ff1744 100%);
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  margin-right: 4px;
+  letter-spacing: 0.5px;
+  animation: flash-glow 2s ease-in-out infinite;
+}
+
+.cart-item-flash-sale-badge i {
+  font-size: 10px;
+  margin-right: 3px;
+}
+
+@keyframes flash-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(215, 0, 24, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(215, 0, 24, 0.8);
+  }
+}
+
+.limit-warning-badge {
+  display: block;
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 6px;
+  box-shadow: 0 2px 4px rgba(255, 152, 0, 0.3);
+}
+
+.limit-warning-badge i {
+  margin-right: 4px;
+  font-size: 10px;
+}
+
 .cart-item-discount-badge {
   display: inline-block;
   background: linear-gradient(135deg, #d70018 0%, #ff0033 100%);
@@ -926,7 +970,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         console.log('  - variant_info:', items[0].variant_info);
         console.log('  - variant_name:', items[0].variant_name);
         console.log('  - ten_san_pham_day_du:', items[0].ten_san_pham_day_du);
-        console.log('  - gia_ban (from variant):', items[0].gia_ban);
+        console.log('  - gia_ban (price):', items[0].gia_ban);
+        console.log('  - gia_ban_formatted:', items[0].gia_ban_formatted);
+        console.log('  - is_flash_sale:', items[0].is_flash_sale);
+        console.log('  - flash_sale_data:', items[0].flash_sale_data);
         console.log('  - ton_kho (from variant):', items[0].ton_kho);
         console.log('  - is_active:', items[0].is_active);
         console.log('  - link_anh:', items[0].link_anh);
@@ -998,12 +1045,13 @@ document.addEventListener('DOMContentLoaded', async function() {
           <h3 class="cart-item-name">${item.ten_san_pham_day_du || item.ten_san_pham}</h3>
           <p class="cart-item-sku">SKU: ${item.ma_sku || 'N/A'}</p>
           ${item.variant_name ? `<span class="cart-item-variant-badge">${item.variant_name}</span>` : ''}
-          ${item.is_discount ? `<span class="cart-item-discount-badge">Giảm ${item.phan_tram_giam}%</span>` : ''}
+          ${item.is_flash_sale ? `<span class="cart-item-flash-sale-badge"><i class="fas fa-bolt"></i> FLASH SALE</span>` : ''}
+          ${item.is_discount && !item.is_flash_sale ? `<span class="cart-item-discount-badge">Giảm ${item.phan_tram_giam}%</span>` : ''}
         </div>
 
         <div class="cart-item-price">
           <div class="current-price">${item.gia_ban_formatted}</div>
-          ${item.is_discount ? `<div class="original-price">${item.gia_niem_yet_formatted}</div>` : ''}
+          ${item.is_discount || item.is_flash_sale ? `<div class="original-price">${item.gia_niem_yet_formatted || (item.flash_sale_data ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(item.flash_sale_data.gia_goc) : '')}</div>` : ''}
         </div>
 
         <div class="cart-item-quantity">
@@ -1017,7 +1065,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         </div>
 
         <div class="cart-item-total">
-          <div class="total-price" data-unit-price="${item.gia_ban}" data-quantity="${item.so_luong}">
+          <div class="total-price" 
+               data-unit-price="${item.gia_ban}" 
+               data-quantity="${item.so_luong}"
+               data-is-flash-sale="${item.is_flash_sale || false}"
+               data-flash-sale-price="${item.flash_sale_data ? item.flash_sale_data.gia_flash_sale : 0}"
+               data-original-price="${item.flash_sale_data ? item.flash_sale_data.gia_goc : item.gia_ban}"
+               data-gioi-han-mua="${item.flash_sale_data ? item.flash_sale_data.gioi_han_mua || 999 : 999}">
             ${item.thanh_tien_formatted}
           </div>
         </div>
@@ -1266,10 +1320,29 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (!cartItem) return;
       
       const totalPriceEl = cartItem.querySelector('.total-price');
-      const price = parseFloat(totalPriceEl.getAttribute('data-unit-price')) || 0;
       const quantity = parseInt(totalPriceEl.getAttribute('data-quantity')) || 0;
       
-      subtotal += price * quantity;
+      // Kiểm tra có flash sale không
+      const isFlashSale = totalPriceEl.getAttribute('data-is-flash-sale') === 'true';
+      const flashSalePrice = parseFloat(totalPriceEl.getAttribute('data-flash-sale-price')) || 0;
+      const originalPrice = parseFloat(totalPriceEl.getAttribute('data-original-price')) || 0;
+      const gioiHanMua = parseInt(totalPriceEl.getAttribute('data-gioi-han-mua')) || 999;
+      
+      let itemTotal = 0;
+      
+      if (isFlashSale && flashSalePrice > 0 && gioiHanMua > 0) {
+        // Tính theo giới hạn mua
+        const soLuongFlashSale = Math.min(quantity, gioiHanMua);
+        const soLuongGiaGoc = Math.max(0, quantity - gioiHanMua);
+        
+        itemTotal = (soLuongFlashSale * flashSalePrice) + (soLuongGiaGoc * originalPrice);
+      } else {
+        // Không có flash sale hoặc flash sale không giới hạn
+        const price = parseFloat(totalPriceEl.getAttribute('data-unit-price')) || 0;
+        itemTotal = price * quantity;
+      }
+      
+      subtotal += itemTotal;
     });
 
     // Tính giảm giá từ voucher
@@ -1305,9 +1378,44 @@ document.addEventListener('DOMContentLoaded', async function() {
   function updateItemTotal(cartId) {
     const cartItem = document.querySelector('.cart-item[data-cart-id="' + cartId + '"]');
     const totalPriceEl = cartItem.querySelector('.total-price');
-    const price = parseFloat(totalPriceEl.getAttribute('data-unit-price')) || 0;
     const quantity = parseInt(totalPriceEl.getAttribute('data-quantity')) || 0;
-    const total = price * quantity;
+    
+    // Kiểm tra có flash sale không
+    const isFlashSale = totalPriceEl.getAttribute('data-is-flash-sale') === 'true';
+    const flashSalePrice = parseFloat(totalPriceEl.getAttribute('data-flash-sale-price')) || 0;
+    const originalPrice = parseFloat(totalPriceEl.getAttribute('data-original-price')) || 0;
+    const gioiHanMua = parseInt(totalPriceEl.getAttribute('data-gioi-han-mua')) || 999;
+    
+    let total = 0;
+    
+    if (isFlashSale && flashSalePrice > 0 && gioiHanMua > 0) {
+      // Tính theo giới hạn mua
+      const soLuongFlashSale = Math.min(quantity, gioiHanMua);
+      const soLuongGiaGoc = Math.max(0, quantity - gioiHanMua);
+      
+      total = (soLuongFlashSale * flashSalePrice) + (soLuongGiaGoc * originalPrice);
+      
+      // Hiển thị cảnh báo nếu vượt giới hạn
+      const infoEl = cartItem.querySelector('.cart-item-info');
+      let limitWarning = infoEl.querySelector('.limit-warning-badge');
+      
+      if (soLuongGiaGoc > 0) {
+        if (!limitWarning) {
+          limitWarning = document.createElement('span');
+          limitWarning.className = 'limit-warning-badge';
+          infoEl.appendChild(limitWarning);
+        }
+        limitWarning.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Vượt giới hạn: ${soLuongFlashSale} sản phẩm giá flash sale, ${soLuongGiaGoc} sản phẩm giá gốc`;
+      } else {
+        if (limitWarning) {
+          limitWarning.remove();
+        }
+      }
+    } else {
+      // Không có flash sale hoặc flash sale không giới hạn
+      const price = parseFloat(totalPriceEl.getAttribute('data-unit-price')) || 0;
+      total = price * quantity;
+    }
 
     totalPriceEl.textContent = Utils.formatCurrency(total);
     calculateSummary();

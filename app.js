@@ -1160,6 +1160,79 @@ app.get('/api/cart', async (req, res) => {
                 ORDER BY ci.ngay_them DESC
             `);
 
+        // Check flash sale cho tất cả variants trong giỏ
+        const variantIds = itemsResult.recordset.map(item => item.variant_id);
+        const flashSaleMap = new Map();
+        
+        if (variantIds.length > 0) {
+            try {
+                const flashSaleRequest = new sql.Request();
+                const flashSaleResult = await flashSaleRequest.query(`
+                    SELECT 
+                        fsi.id as flash_sale_item_id,
+                        fsi.variant_id,
+                        fsi.gia_flash_sale,
+                        fsi.gia_goc,
+                        fsi.so_luong_ton,
+                        fsi.da_ban,
+                        fsi.gioi_han_mua,
+                        fs.ngay_bat_dau,
+                        fs.ngay_ket_thuc
+                    FROM flash_sale_items fsi
+                    INNER JOIN flash_sales fs ON fsi.flash_sale_id = fs.id
+                    WHERE fsi.variant_id IN ('${variantIds.join("','")}')
+                        AND fs.trang_thai = N'dang_dien_ra'
+                        AND fsi.trang_thai = N'dang_ban'
+                        AND GETDATE() BETWEEN fs.ngay_bat_dau AND fs.ngay_ket_thuc
+                        AND (fsi.so_luong_ton - fsi.da_ban) > 0
+                `);
+                
+                // Query số lượng user đã mua cho từng flash_sale_item
+                const flashSaleItemIds = flashSaleResult.recordset.map(fs => fs.flash_sale_item_id);
+                const userPurchasedMap = new Map();
+                
+                if (flashSaleItemIds.length > 0) {
+                    const purchasedRequest = new sql.Request();
+                    const purchasedResult = await purchasedRequest
+                        .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                        .query(`
+                            SELECT 
+                                flash_sale_item_id,
+                                SUM(so_luong) as da_mua
+                            FROM flash_sale_orders
+                            WHERE flash_sale_item_id IN ('${flashSaleItemIds.join("','")}')
+                              AND nguoi_dung_id = @nguoi_dung_id
+                            GROUP BY flash_sale_item_id
+                        `);
+                    
+                    purchasedResult.recordset.forEach(p => {
+                        userPurchasedMap.set(p.flash_sale_item_id, p.da_mua);
+                    });
+                }
+                
+                flashSaleResult.recordset.forEach(fs => {
+                    const daMua = userPurchasedMap.get(fs.flash_sale_item_id) || 0;
+                    const conDuocMua = Math.max(0, (fs.gioi_han_mua || 999) - daMua);
+                    
+                    flashSaleMap.set(fs.variant_id, {
+                        flash_sale_item_id: fs.flash_sale_item_id,
+                        gia_flash_sale: fs.gia_flash_sale,
+                        gia_goc: fs.gia_goc,
+                        so_luong_ton: fs.so_luong_ton,
+                        da_ban: fs.da_ban,
+                        con_lai: fs.so_luong_ton - fs.da_ban,
+                        gioi_han_mua: fs.gioi_han_mua,
+                        da_mua: daMua,
+                        con_duoc_mua: conDuocMua,
+                        ngay_bat_dau: fs.ngay_bat_dau,
+                        ngay_ket_thuc: fs.ngay_ket_thuc
+                    });
+                });
+            } catch (fsError) {
+                console.error('⚠️ Error checking flash sales:', fsError);
+            }
+        }
+        
         // Format cart items với thông tin từ product_variants
         const cartItems = itemsResult.recordset.map(item => {
             const variantImage = item.variant_image || item.link_anh_dai_dien || '/image/default-product.png';
@@ -1169,10 +1242,34 @@ app.get('/api/cart', async (req, res) => {
             const fullName = variantName ? `${productName} - ${variantName}` : productName;
             
             // Kiểm tra flash sale cho variant này
-            const isFlashSale = false; // TODO: Check flash sale
-            const flashSalePrice = null;
+            const flashSaleData = flashSaleMap.get(item.variant_id);
+            const isFlashSale = !!flashSaleData;
+            const flashSalePrice = flashSaleData ? flashSaleData.gia_flash_sale : null;
+            const conDuocMua = flashSaleData ? flashSaleData.con_duoc_mua : 0; // Số lượng còn được mua (đã trừ đi số đã mua)
             
-            const finalPrice = isFlashSale && flashSalePrice ? flashSalePrice : variantPrice;
+            // Tính giá và thành tiền dựa trên số lượng còn được mua
+            let finalPrice = variantPrice;
+            let thanhTien = variantPrice * item.so_luong;
+            let soLuongFlashSale = 0;
+            let soLuongGiaGoc = 0;
+            
+            if (isFlashSale && flashSalePrice && conDuocMua > 0) {
+                // Số lượng được hưởng giá flash sale (dựa trên số còn được mua)
+                soLuongFlashSale = Math.min(item.so_luong, conDuocMua);
+                // Số lượng vượt giới hạn, tính giá gốc
+                soLuongGiaGoc = Math.max(0, item.so_luong - conDuocMua);
+                
+                // Tính tổng thành tiền hỗn hợp
+                thanhTien = (soLuongFlashSale * flashSalePrice) + (soLuongGiaGoc * variantPrice);
+                
+                // Giá hiển thị: giá flash sale nếu chưa vượt giới hạn
+                finalPrice = item.so_luong <= conDuocMua ? flashSalePrice : variantPrice;
+            } else if (isFlashSale && flashSalePrice && conDuocMua === 0) {
+                // User đã mua hết hạn mức flash sale → hiển thị giá gốc
+                finalPrice = variantPrice;
+                thanhTien = variantPrice * item.so_luong;
+                soLuongGiaGoc = item.so_luong;
+            }
             
             return {
                 id: item.id,
@@ -1199,6 +1296,10 @@ app.get('/api/cart', async (req, res) => {
                 thuong_hieu: item.ten_thuong_hieu,
                 danh_muc: item.ten_danh_muc,
                 is_flash_sale: isFlashSale,
+                flash_sale_data: flashSaleData || null,
+                so_luong_flash_sale: soLuongFlashSale, // Số lượng được giá flash sale
+                so_luong_gia_goc: soLuongGiaGoc, // Số lượng tính giá gốc
+                vuot_gioi_han: soLuongGiaGoc > 0, // Đã vượt giới hạn mua
                 is_discount: item.gia_niem_yet && finalPrice < item.gia_niem_yet,
                 phan_tram_giam: item.gia_niem_yet && item.gia_niem_yet > 0 ? 
                     Math.round((1 - finalPrice / item.gia_niem_yet) * 100) : 0,
@@ -1210,10 +1311,11 @@ app.get('/api/cart', async (req, res) => {
                     style: 'currency', 
                     currency: 'VND' 
                 }).format(item.gia_niem_yet) : null,
+                thanh_tien: thanhTien, // Thành tiền số (để tính tổng)
                 thanh_tien_formatted: new Intl.NumberFormat('vi-VN', { 
                     style: 'currency', 
                     currency: 'VND' 
-                }).format(finalPrice * item.so_luong)
+                }).format(thanhTien)
             };
         });
         
@@ -10358,17 +10460,62 @@ app.post('/api/orders', async (req, res) => {
         const kho_giao_hang = primaryWarehouse.id;
         const site_processed = primaryWarehouse.vung_id;
 
+        // Check flash sale for all variants BEFORE transaction
+        console.log('Checking flash sale for variants...');
+        const variantIds = items.map(item => item.variant_id);
+        const flashSaleMap = new Map();
+        
+        if (variantIds.length > 0) {
+            try {
+                const flashSaleCheckRequest = new sql.Request();
+                const flashSaleCheckResult = await flashSaleCheckRequest.query(`
+                    SELECT 
+                        fsi.id as flash_sale_item_id,
+                        fsi.variant_id,
+                        fsi.gia_flash_sale,
+                        fsi.gioi_han_mua
+                    FROM flash_sale_items fsi
+                    INNER JOIN flash_sales fs ON fsi.flash_sale_id = fs.id
+                    WHERE fsi.variant_id IN ('${variantIds.join("','")}')
+                        AND fs.trang_thai = N'dang_dien_ra'
+                        AND fsi.trang_thai = N'dang_ban'
+                        AND GETDATE() BETWEEN fs.ngay_bat_dau AND fs.ngay_ket_thuc
+                        AND (fsi.so_luong_ton - fsi.da_ban) > 0
+                `);
+                
+                flashSaleCheckResult.recordset.forEach(fs => {
+                    flashSaleMap.set(fs.variant_id, {
+                        flash_sale_item_id: fs.flash_sale_item_id,
+                        gia_flash_sale: fs.gia_flash_sale,
+                        gioi_han_mua: fs.gioi_han_mua
+                    });
+                });
+                
+                console.log('✅ Found flash sale items:', flashSaleMap.size);
+            } catch (fsError) {
+                console.error('⚠️ Error checking flash sales:', fsError);
+            }
+        }
+
         // Check if items need to be fulfilled from multiple warehouses
         const itemsWithWarehouse = [];
         for (const item of items) {
+            // Check if this variant has flash sale
+            const flashSaleInfo = flashSaleMap.get(item.variant_id);
+            
             // For now, allocate all items to primary warehouse
             // TODO: Implement inventory check and smart allocation
             itemsWithWarehouse.push({
                 ...item,
                 warehouse_id: primaryWarehouse.id,
-                warehouse_region: primaryWarehouse.vung_id
+                warehouse_region: primaryWarehouse.vung_id,
+                flash_sale_item_id: flashSaleInfo ? flashSaleInfo.flash_sale_item_id : null,
+                gia_flash_sale: flashSaleInfo ? flashSaleInfo.gia_flash_sale : null,
+                gioi_han_mua: flashSaleInfo ? flashSaleInfo.gioi_han_mua : null
             });
         }
+        
+        console.log('Items with warehouse and flash sale:', itemsWithWarehouse);
 
         // Calculate chi_phi_noi_bo if cross-region fulfillment
         let chi_phi_noi_bo = 0;
@@ -10615,6 +10762,78 @@ app.post('/api/orders', async (req, res) => {
                 } catch (mongoError) {
                     console.error('❌ Error updating MongoDB stock:', mongoError);
                     // Don't rollback transaction for MongoDB failure
+                }
+            }
+
+            // 7.5. Insert flash_sale_orders for flash sale items
+            console.log('Step 4: Recording flash sale orders...');
+            for (const item of itemsWithWarehouse) {
+                if (item.flash_sale_item_id && item.gia_flash_sale) {
+                    console.log('🔥 Recording flash sale order - variant:', item.variant_id, 'flash_sale_item:', item.flash_sale_item_id, 'quantity:', item.so_luong);
+                    
+                    // Kiểm tra user đã mua bao nhiêu flash_sale_item này rồi
+                    const checkPurchasedRequest = new sql.Request(transaction);
+                    const purchasedResult = await checkPurchasedRequest
+                        .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
+                        .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                        .query(`
+                            SELECT ISNULL(SUM(so_luong), 0) as da_mua
+                            FROM flash_sale_orders
+                            WHERE flash_sale_item_id = @flash_sale_item_id
+                              AND nguoi_dung_id = @nguoi_dung_id
+                        `);
+                    
+                    const daMua = purchasedResult.recordset[0].da_mua || 0;
+                    const gioiHanMua = item.gioi_han_mua || 999;
+                    
+                    // Tính số lượng còn được phép mua
+                    const conDuocMua = Math.max(0, gioiHanMua - daMua);
+                    
+                    // Tính số lượng thực tế được hưởng giá flash sale (không vượt số còn được mua)
+                    const soLuongFlashSale = Math.min(item.so_luong, conDuocMua);
+                    
+                    console.log('  - Giới hạn mua:', gioiHanMua, '| Đã mua:', daMua, '| Còn được mua:', conDuocMua, '→ Số lượng flash sale:', soLuongFlashSale);
+                    
+                    // Nếu đã vượt giới hạn mua rồi, không insert vào flash_sale_orders
+                    if (soLuongFlashSale <= 0) {
+                        console.log('⚠️  User đã đạt giới hạn mua flash sale item này!');
+                        continue;
+                    }
+                    
+                    // Chỉ lưu số lượng được hưởng giá flash sale (không tính phần vượt giới hạn)
+                    const flashSaleOrderRequest = new sql.Request(transaction);
+                    await flashSaleOrderRequest
+                        .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
+                        .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                        .input('don_hang_id', sql.UniqueIdentifier, orderId)
+                        .input('so_luong', sql.Int, soLuongFlashSale)
+                        .input('gia_flash_sale', sql.Decimal(15, 2), item.gia_flash_sale)
+                        .query(`
+                            INSERT INTO flash_sale_orders (
+                                flash_sale_item_id, nguoi_dung_id, don_hang_id, 
+                                so_luong, gia_flash_sale, ngay_mua
+                            )
+                            VALUES (
+                                @flash_sale_item_id, @nguoi_dung_id, @don_hang_id,
+                                @so_luong, @gia_flash_sale, GETDATE()
+                            )
+                        `);
+                    
+                    // Cập nhật số lượng đã bán trong flash_sale_items
+                    const updateFlashSaleItemRequest = new sql.Request(transaction);
+                    await updateFlashSaleItemRequest
+                        .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
+                        .input('so_luong', sql.Int, soLuongFlashSale)
+                        .query(`
+                            UPDATE flash_sale_items
+                            SET da_ban = da_ban + @so_luong,
+                                ngay_cap_nhat = GETDATE()
+                            WHERE id = @flash_sale_item_id
+                        `);
+                    
+                    console.log('✅ Flash sale order recorded:', soLuongFlashSale, 'items at', item.gia_flash_sale, '₫');
+                } else {
+                    console.log('⏭️  Skip item (not flash sale) - variant:', item.variant_id);
                 }
             }
 

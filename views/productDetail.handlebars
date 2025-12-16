@@ -95,16 +95,32 @@
             
             <!-- Thông tin variant đã chọn -->
             <div class="cps-selected-variant-info" id="selectedVariantInfo">
-              <!-- Flash Sale Info - Hiển thị khi chọn variant flash sale -->
-              <div class="cps-flash-sale-info" id="flashSaleInfo" style="display: none;">
-                <div class="flash-sale-header">
-                  <i class="fas fa-bolt"></i>
-                  <span>ĐANG FLASH SALE</span>
+              <!-- Flash Sale Banner - Nổi bật ở đầu -->
+              <div class="flash-sale-banner" id="flashSaleBanner" style="display: none;">
+                <div class="flash-sale-timer-compact">
+                  <i class="fas fa-tags"></i>
+                  <span>GIÁ ƯU ĐÃI</span>
                 </div>
+              </div>
+              
+              <!-- Price Display - Redesigned -->
+              <div class="variant-price-box" id="variantPriceBox">
+                <div class="price-label">Giá bán</div>
+                <div class="price-main-row">
+                  <div class="price-current" id="variantPrice">Vui lòng chọn phiên bản</div>
+                  <div class="price-discount-tag" id="variantDiscountBadge" style="display: none;">
+                    <span id="variantDiscountPercent"></span>
+                  </div>
+                </div>
+                <div class="price-original" id="variantOriginalPrice" style="display: none;"></div>
+              </div>
+              
+              <!-- Flash Sale Details - Chi tiết khi expand -->
+              <div class="cps-flash-sale-details" id="flashSaleDetails" style="display: none;">
                 <div class="flash-sale-countdown">
                   <div class="countdown-label">
                     <i class="fas fa-clock"></i>
-                    Kết thúc sau:
+                    Thời gian còn lại
                   </div>
                   <div class="countdown-timer" id="flashSaleCountdown">
                     <div class="time-unit">
@@ -138,14 +154,6 @@
                       <span class="remaining-count">Còn lại: <strong id="flashSaleRemaining">0</strong></span>
                     </div>
                   </div>
-                </div>
-              </div>
-              
-              <div class="cps-variant-price-display">
-                <div class="cps-variant-current-price" id="variantPrice">Vui lòng chọn phiên bản</div>
-                <div class="cps-variant-original-price" id="variantOriginalPrice" style="display: none;"></div>
-                <div class="cps-variant-discount-badge" id="variantDiscountBadge" style="display: none;">
-                  <span id="variantDiscountPercent"></span>
                 </div>
               </div>
               <div class="cps-variant-availability" style="display: none;">
@@ -759,18 +767,23 @@ body {
   width: 40px;
   height: 40px;
   border: none;
-  background: #f8f9fa;
+  background: #f5f5f5;
   color: #666;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 16px;
 }
 
 .cps-qty-btn:hover {
-  background: #d70018;
+  background: #D70018;
   color: white;
+}
+
+.cps-qty-btn:active {
+  transform: scale(0.95);
 }
 
 .cps-qty-input {
@@ -780,6 +793,7 @@ body {
   text-align: center;
   font-weight: 600;
   font-size: 16px;
+  color: #333;
 }
 
 .cps-qty-input::-webkit-outer-spin-button,
@@ -790,66 +804,77 @@ body {
 /* Action Buttons */
 .cps-action-buttons {
   display: flex;
-  gap: 15px;
-  margin-bottom: 25px;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.cps-action-buttons i {
+  font-size: 18px;
 }
 
 .cps-btn-add-cart,
 .cps-btn-buy-now {
   flex: 1;
-  height: 50px;
+  height: 52px;
+  padding: 0 24px;
   border: none;
-  border-radius: 10px;
+  border-radius: 6px;
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 
 .cps-btn-add-cart {
   background: white;
-  border: 2px solid #d70018;
-  color: #d70018;
+  border: 2px solid #D70018;
+  color: #D70018;
 }
 
 .cps-btn-add-cart:hover {
-  background: #d70018;
+  background: #D70018;
   color: white;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(215, 0, 24, 0.3);
+  border-color: #D70018;
+}
+
+.cps-btn-add-cart:active {
+  transform: scale(0.98);
 }
 
 .cps-btn-buy-now {
-  background: linear-gradient(135deg, #d70018, #ff0033);
+  background: #D70018;
   color: white;
-  box-shadow: 0 4px 12px rgba(215, 0, 24, 0.3);
+  box-shadow: 0 2px 8px rgba(215, 0, 24, 0.25);
 }
 
 .cps-btn-buy-now:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(215, 0, 24, 0.4);
+  background: #c00016;
+  box-shadow: 0 4px 12px rgba(215, 0, 24, 0.35);
+}
+
+.cps-btn-buy-now:active {
+  transform: scale(0.98);
 }
 
 /* Variants - CellphoneS Style */
 .cps-variants-section {
-  margin-bottom: 25px;
+  margin-bottom: 20px;
 }
 
 .cps-variant-group {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .cps-variant-label {
   font-size: 15px;
   font-weight: 700;
   color: #333;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .cps-variant-options {
@@ -861,27 +886,32 @@ body {
 .cps-variant-option {
   min-width: 100px;
   padding: 10px 16px;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
   background: white;
   color: #333;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.2s ease;
   text-align: center;
 }
 
 .cps-variant-option:hover {
-  border-color: #d70018;
-  color: #d70018;
+  border-color: #D70018;
+  color: #D70018;
+  background: #fff5f5;
 }
 
 .cps-variant-option.active {
-  border-color: #d70018;
-  background: #d70018;
+  border-color: #D70018;
+  background: #D70018;
   color: white;
-  box-shadow: 0 2px 8px rgba(215, 0, 24, 0.3);
+  box-shadow: 0 2px 6px rgba(215, 0, 24, 0.25);
+}
+
+.cps-variant-option:active {
+  transform: scale(0.97);
 }
 
 .cps-variant-option:disabled {
@@ -922,128 +952,229 @@ body {
 }
 
 .cps-selected-variant-info {
-  margin-top: 20px;
-  padding: 16px;
-  background: linear-gradient(135deg, #fff5f5, #fff);
-  border: 2px solid #ffe0e0;
+  margin-top: 24px;
+  padding: 0;
+  background: white;
+  border: 2px solid #D70018;
   border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(215, 0, 24, 0.15);
 }
 
-/* Flash Sale Info Styles */
-.cps-flash-sale-info {
-  background: linear-gradient(135deg, #fff0f0 0%, #ffe5e5 50%, #ffd5d5 100%);
-  border: 2px solid #ff6b6b;
-  border-radius: 16px;
-  padding: 20px;
-  margin-bottom: 20px;
-  box-shadow: 0 8px 24px rgba(255, 0, 0, 0.15);
-  animation: flash-glow-pulse 3s ease-in-out infinite;
-}
-
-@keyframes flash-glow-pulse {
-  0%, 100% {
-    box-shadow: 0 8px 24px rgba(255, 0, 0, 0.15);
-  }
-  50% {
-    box-shadow: 0 12px 32px rgba(255, 0, 0, 0.25), 0 0 20px rgba(215, 0, 24, 0.2);
-  }
-}
-
-.flash-sale-header {
+/* Flash Sale Banner - Nổi bật ở đầu */
+.flash-sale-banner {
+  background: linear-gradient(135deg, #D70018 0%, #ff1744 100%);
+  padding: 14px 20px;
   display: flex;
   align-items: center;
   justify-content: center;
+  animation: flash-pulse 2s ease-in-out infinite;
+  position: relative;
+  overflow: hidden;
+}
+
+.flash-sale-banner::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  animation: shine 3s infinite;
+}
+
+@keyframes shine {
+  0% { left: -100%; }
+  50%, 100% { left: 100%; }
+}
+
+@keyframes flash-pulse {
+  0%, 100% {
+    box-shadow: inset 0 0 0 rgba(255, 255, 255, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.3);
+  }
+}
+
+.flash-sale-badge {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  background: linear-gradient(135deg, #d70018, #ff1744);
   color: white;
-  padding: 12px 20px;
-  border-radius: 10px;
   font-size: 18px;
-  font-weight: bold;
-  margin-bottom: 16px;
-  box-shadow: 0 4px 12px rgba(215, 0, 24, 0.4);
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3),
+               0 0 20px rgba(255, 255, 255, 0.3);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.flash-sale-badge i {
+  font-size: 20px;
+  animation: icon-bounce 1s ease-in-out infinite;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+@keyframes icon-bounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.flash-sale-timer-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.25);
+  padding: 8px 16px;
+  border-radius: 6px;
+  color: white;
+  font-size: 15px;
+  font-weight: 800;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   letter-spacing: 1px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
-.flash-sale-header i {
-  font-size: 22px;
-  animation: flash-icon-bounce 1s ease-in-out infinite;
+.flash-sale-timer-compact span {
+  font-size: 15px;
+  font-weight: 800;
 }
 
-@keyframes flash-icon-bounce {
-  0%, 100% { transform: scale(1) rotate(0deg); }
-  50% { transform: scale(1.2) rotate(-10deg); }
+.flash-sale-timer-compact i {
+  font-size: 17px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.1); }
+}
+
+/* Price Box - Redesigned */
+.variant-price-box {
+  padding: 24px 20px;
+  background: #fff;
+}
+
+.price-label {
+  font-size: 14px;
+  color: #666;
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.price-main-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.price-current {
+  font-size: 32px;
+  font-weight: 700;
+  color: #D70018;
+  line-height: 1;
+}
+
+.price-discount-tag {
+  background: #D70018;
+  color: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.price-original {
+  font-size: 18px;
+  color: #999;
+  text-decoration: line-through;
+  font-weight: 400;
+}
+
+/* Flash Sale Details - Expandable section */
+.cps-flash-sale-details {
+  background: #fff9f9;
+  border-top: 1px dashed #D70018;
+  padding: 20px;
 }
 
 .flash-sale-countdown {
   background: white;
   padding: 16px;
-  border-radius: 12px;
+  border-radius: 8px;
   margin-bottom: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid #ffe0e0;
 }
 
 .countdown-label {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   color: #666;
-  font-size: 14px;
+  font-size: 13px;
   margin-bottom: 12px;
   font-weight: 600;
 }
 
 .countdown-label i {
-  color: #d70018;
-  font-size: 16px;
+  color: #D70018;
+  font-size: 14px;
 }
 
 .countdown-timer {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .time-unit {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: linear-gradient(135deg, #d70018, #ff1744);
-  padding: 12px 16px;
-  border-radius: 10px;
-  min-width: 70px;
-  box-shadow: 0 4px 12px rgba(215, 0, 24, 0.3);
+  background: #D70018;
+  padding: 10px 14px;
+  border-radius: 8px;
+  min-width: 60px;
 }
 
 .time-value {
-  font-size: 32px;
-  font-weight: bold;
+  font-size: 28px;
+  font-weight: 700;
   color: white;
   line-height: 1;
   font-family: 'Courier New', monospace;
 }
 
 .time-label {
-  font-size: 11px;
+  font-size: 10px;
   color: rgba(255, 255, 255, 0.9);
-  margin-top: 4px;
+  margin-top: 3px;
   font-weight: 600;
 }
 
 .time-separator {
-  font-size: 28px;
-  font-weight: bold;
-  color: #d70018;
-  margin: 0 4px;
+  font-size: 24px;
+  font-weight: 700;
+  color: #D70018;
+  margin: 0 2px;
 }
 
 .flash-sale-stock {
   background: white;
   padding: 16px;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  border: 1px solid #ffe0e0;
 }
 
 .stock-progress {
@@ -1062,7 +1193,7 @@ body {
 
 .stock-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #ff6b6b 0%, #d70018 100%);
+  background: #D70018;
   border-radius: 12px;
   transition: width 0.5s ease;
   position: relative;
@@ -1093,51 +1224,20 @@ body {
   color: #666;
 }
 
-.sold-count strong,
-.remaining-count strong {
-  color: #d70018;
-  font-size: 16px;
+.sold-count strong {
+  color: #D70018;
+  font-size: 15px;
   margin-left: 4px;
 }
 
 .remaining-count {
-  color: #ff9800;
+  color: #ff6b00;
 }
 
 .remaining-count strong {
   color: #ff6b00;
-}
-
-.cps-variant-price-display {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-  flex-wrap: wrap;
-}
-
-.cps-variant-current-price {
-  font-size: 28px;
-  font-weight: 700;
-  color: #d70018;
-}
-
-.cps-variant-original-price {
-  font-size: 18px;
-  color: #999;
-  text-decoration: line-through;
-  font-weight: 400;
-}
-
-.cps-variant-discount-badge {
-  display: inline-block;
-  background: #d70018;
-  color: white;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  margin-left: 8px;
+  font-size: 15px;
+  margin-left: 4px;
 }
 
 .cps-variant-availability {
@@ -1159,12 +1259,12 @@ body {
 
 /* Quantity & Actions trong Variant Section */
 .cps-selected-variant-info .cps-quantity-section {
-  margin-top: 20px;
+  margin-top: 16px;
   margin-bottom: 0;
 }
 
 .cps-selected-variant-info .cps-action-buttons {
-  margin-top: 20px;
+  margin-top: 16px;
   margin-bottom: 0;
 }
 
@@ -1958,21 +2058,83 @@ document.addEventListener('DOMContentLoaded', function() {
   function updateVariantDisplay(combo, sqlVariant) {
     const variantPriceElem = document.getElementById('variantPrice');
     const variantOriginalPriceElem = document.getElementById('variantOriginalPrice');
+    const variantDiscountBadge = document.getElementById('variantDiscountBadge');
+    const variantDiscountPercent = document.getElementById('variantDiscountPercent');
     const variantStockText = document.getElementById('variantStockText');
     const availabilityElem = document.querySelector('.cps-variant-availability');
+    const flashSaleBanner = document.getElementById('flashSaleBanner');
+    const flashSaleDetails = document.getElementById('flashSaleDetails');
+    const flashTimeCompact = document.getElementById('flashTimeCompact');
     
     if (!combo) {
       variantPriceElem.textContent = 'Vui lòng chọn phiên bản';
       variantOriginalPriceElem.style.display = 'none';
+      variantDiscountBadge.style.display = 'none';
       if (availabilityElem) availabilityElem.style.display = 'none';
+      if (flashSaleBanner) flashSaleBanner.style.display = 'none';
+      if (flashSaleDetails) flashSaleDetails.style.display = 'none';
       window.selectedVariant = null;
       return;
     }
     
-    // Display price from variant_combination (MongoDB) - prioritize combo.price
-    // Fallback to SQL only if combo doesn't have price
-    const salePrice = combo.price || sqlVariant?.gia_ban || 0;
-    const originalPrice = combo.original_price || sqlVariant?.gia_niem_yet || null;
+    // Check if SQL variant has flash sale (data from backend)
+    const flashSaleData = sqlVariant?.flashSale;
+    const isFlashSale = sqlVariant?.isFlashSale || false;
+    let salePrice, originalPrice;
+    
+    console.log('🔍 Flash sale check:', {
+      hasFlashSale: isFlashSale,
+      flashSaleData: flashSaleData,
+      sqlVariant: sqlVariant
+    });
+    
+    if (isFlashSale && flashSaleData) {
+      // Flash sale active - use flash sale price
+      salePrice = flashSaleData.gia_flash_sale;
+      originalPrice = flashSaleData.gia_goc || combo.price || sqlVariant?.gia_ban || 0;
+      
+      console.log('⚡ Flash sale active:', {
+        flashPrice: salePrice,
+        normalPrice: originalPrice,
+        flashSaleData: flashSaleData
+      });
+      
+      // Show flash sale banner
+      if (flashSaleBanner) flashSaleBanner.style.display = 'flex';
+      if (flashSaleDetails) flashSaleDetails.style.display = 'block';
+      
+      // Update compact countdown
+      if (flashTimeCompact && flashSaleData.ngay_ket_thuc) {
+        updateCompactCountdown(flashSaleData.ngay_ket_thuc);
+      }
+      
+      // Update full flash sale info with proper structure
+      showFlashSaleInfo({
+        id: flashSaleData.id,
+        gia_flash_sale: flashSaleData.gia_flash_sale,
+        gia_goc: flashSaleData.gia_goc,
+        so_luong_ton: flashSaleData.so_luong_ton,
+        da_ban: flashSaleData.da_ban,
+        con_lai: flashSaleData.con_lai,
+        ngay_ket_thuc: flashSaleData.ngay_ket_thuc,
+        ngay_bat_dau: flashSaleData.ngay_bat_dau
+      });
+      
+    } else {
+      // Normal price - no flash sale
+      salePrice = combo.price || sqlVariant?.gia_ban || 0;
+      originalPrice = combo.original_price || sqlVariant?.gia_niem_yet || null;
+      
+      console.log('💰 Normal price display:', {
+        salePrice: salePrice,
+        originalPrice: originalPrice
+      });
+      
+      // Hide flash sale banner
+      if (flashSaleBanner) flashSaleBanner.style.display = 'none';
+      if (flashSaleDetails) flashSaleDetails.style.display = 'none';
+      hideFlashSaleInfo();
+    }
     
     console.log('💰 Price display:', {
       comboPrice: combo.price,
@@ -1980,9 +2142,11 @@ document.addEventListener('DOMContentLoaded', function() {
       sqlPrice: sqlVariant?.gia_ban,
       sqlOriginalPrice: sqlVariant?.gia_niem_yet,
       finalSalePrice: salePrice,
-      finalOriginalPrice: originalPrice
+      finalOriginalPrice: originalPrice,
+      hasFlashSale: !!(flashSaleData && flashSaleData.is_active)
     });
     
+    // Display current price
     if (salePrice) {
       variantPriceElem.textContent = new Intl.NumberFormat('vi-VN', {
         style: 'currency',
@@ -1990,14 +2154,23 @@ document.addEventListener('DOMContentLoaded', function() {
       }).format(salePrice);
     }
     
+    // Display original price and discount
     if (originalPrice && originalPrice > salePrice) {
       variantOriginalPriceElem.textContent = new Intl.NumberFormat('vi-VN', {
         style: 'currency',
         currency: 'VND'
       }).format(originalPrice);
-      variantOriginalPriceElem.style.display = 'inline-block';
+      variantOriginalPriceElem.style.display = 'block';
+      
+      // Calculate and show discount percentage
+      const discountPercent = Math.round(((originalPrice - salePrice) / originalPrice) * 100);
+      if (variantDiscountPercent) {
+        variantDiscountPercent.textContent = `-${discountPercent}%`;
+      }
+      variantDiscountBadge.style.display = 'inline-block';
     } else {
       variantOriginalPriceElem.style.display = 'none';
+      variantDiscountBadge.style.display = 'none';
     }
     
     // Display stock from variant_combination (MongoDB) - prioritize combo.stock
@@ -2139,13 +2312,49 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Flash sale countdown timer
   let flashSaleCountdownInterval = null;
+  let compactCountdownInterval = null;
+  
+  // Update compact countdown (for banner)
+  function updateCompactCountdown(endTime) {
+    const flashTimeCompact = document.getElementById('flashTimeCompact');
+    if (!flashTimeCompact) return;
+    
+    if (compactCountdownInterval) {
+      clearInterval(compactCountdownInterval);
+    }
+    
+    const endTimeMs = new Date(endTime).getTime();
+    
+    function update() {
+      const now = new Date().getTime();
+      const distance = endTimeMs - now;
+      
+      if (distance < 0) {
+        flashTimeCompact.textContent = '00:00:00';
+        clearInterval(compactCountdownInterval);
+        return;
+      }
+      
+      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+      
+      flashTimeCompact.textContent = 
+        hours.toString().padStart(2, '0') + ':' +
+        minutes.toString().padStart(2, '0') + ':' +
+        seconds.toString().padStart(2, '0');
+    }
+    
+    update();
+    compactCountdownInterval = setInterval(update, 1000);
+  }
   
   function showFlashSaleInfo(flashSale) {
-    const flashSaleInfo = document.getElementById('flashSaleInfo');
-    if (!flashSaleInfo) return;
+    const flashSaleDetails = document.getElementById('flashSaleDetails');
+    if (!flashSaleDetails) return;
     
-    // Hiển thị flash sale info box
-    flashSaleInfo.style.display = 'block';
+    // Hiển thị flash sale details box
+    flashSaleDetails.style.display = 'block';
     
     // Cập nhật số lượng
     const sold = flashSale.da_ban || 0;
@@ -2196,15 +2405,19 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   function hideFlashSaleInfo() {
-    const flashSaleInfo = document.getElementById('flashSaleInfo');
-    if (flashSaleInfo) {
-      flashSaleInfo.style.display = 'none';
+    const flashSaleDetails = document.getElementById('flashSaleDetails');
+    if (flashSaleDetails) {
+      flashSaleDetails.style.display = 'none';
     }
     
-    // Dừng countdown timer
+    // Dừng countdown timers
     if (flashSaleCountdownInterval) {
       clearInterval(flashSaleCountdownInterval);
       flashSaleCountdownInterval = null;
+    }
+    if (compactCountdownInterval) {
+      clearInterval(compactCountdownInterval);
+      compactCountdownInterval = null;
     }
   }
   
