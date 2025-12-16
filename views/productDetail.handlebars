@@ -1538,13 +1538,64 @@ document.addEventListener('DOMContentLoaded', function() {
   // Buy Now
   const buyNowBtn = document.getElementById('buyNowBtn');
   buyNowBtn?.addEventListener('click', function() {
-    const quantity = quantityInput.value;
-    const productId = '{{product.id}}';
+    const selectedVariant = window.selectedVariant;
     
-    console.log('⚡ Mua ngay:', productId, 'Số lượng:', quantity);
+    console.log('⚡ Mua ngay - Selected variant:', selectedVariant);
     
-    // TODO: Chuyển đến trang thanh toán
-    // window.location.href = `/checkout?product=${productId}&quantity=${quantity}`;
+    if (!selectedVariant) {
+      alert('Vui lòng chọn phiên bản sản phẩm');
+      return;
+    }
+    
+    // Lấy SQL variant ID
+    const variantId = selectedVariant.sql_variant_id || selectedVariant.id;
+    
+    if (!variantId) {
+      alert('Không tìm thấy thông tin phiên bản sản phẩm');
+      console.error('Missing variant ID. Selected variant:', selectedVariant);
+      return;
+    }
+    
+    // Lấy userId từ AuthHelper
+    const userId = AuthHelper.getUserId();
+    if (!userId) {
+      alert('Vui lòng đăng nhập để mua hàng');
+      window.location.href = '/login';
+      return;
+    }
+    
+    // Thêm vào giỏ hàng với số lượng 1, sau đó redirect qua đặt hàng
+    console.log('⚡ Buy now - Adding to cart with quantity 1');
+    
+    this.disabled = true;
+    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang xử lý...';
+    
+    fetch('/api/cart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        variant_id: variantId,
+        so_luong: 1, // Luôn thêm số lượng 1
+        userId: userId
+      })
+    })
+    .then(res => res.json())
+    .then(result => {
+      if (result.success && result.data && result.data.cartItemId) {
+        // Redirect đến trang thanh toán với cart item và flag buynow=1 (chỉ lấy 1 sản phẩm)
+        window.location.href = `/dathang?items=${result.data.cartItemId}&buynow=1`;
+      } else {
+        alert(result.message || 'Không thể thêm vào giỏ hàng');
+        this.disabled = false;
+        this.innerHTML = '<i class="fas fa-bolt"></i> MUA NGAY';
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      alert('Có lỗi xảy ra, vui lòng thử lại');
+      this.disabled = false;
+      this.innerHTML = '<i class="fas fa-bolt"></i> MUA NGAY';
+    });
   });
 
   // Thumbnail Click - Cập nhật để sử dụng data-image
@@ -1852,12 +1903,17 @@ document.addEventListener('DOMContentLoaded', function() {
     const optionButtons = document.querySelectorAll('.cps-variant-option');
     
     optionButtons.forEach(btn => {
-      btn.addEventListener('click', function() {
+      // Remove old listeners by cloning the button (removes all event listeners)
+      const newBtn = btn.cloneNode(true);
+      btn.parentNode.replaceChild(newBtn, btn);
+      
+      // Add new listener
+      newBtn.addEventListener('click', function() {
         const variantIndex = parseInt(this.getAttribute('data-variant-index'));
         const sku = this.getAttribute('data-sku');
         
         // Remove active from all siblings
-        optionButtons.forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.cps-variant-option').forEach(b => b.classList.remove('active'));
         
         // Add active to this button
         this.classList.add('active');
@@ -1994,6 +2050,82 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   console.log('🗺️ Variant ID Map:', variantIdMap);
+  
+  // Auto-select variant from URL query parameter
+  function autoSelectVariantFromUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const variantIdFromUrl = urlParams.get('variant');
+    
+    if (!variantIdFromUrl) {
+      console.log('ℹ️ No variant parameter in URL');
+      return;
+    }
+    
+    console.log('🔍 Auto-selecting variant from URL:', variantIdFromUrl);
+    
+    // Find the variant in productVariantsData
+    const sqlVariant = productVariantsData.find(v => v.id === variantIdFromUrl);
+    
+    if (!sqlVariant) {
+      console.warn('⚠️ Variant not found in SQL data:', variantIdFromUrl);
+      return;
+    }
+    
+    console.log('✅ Found SQL variant:', sqlVariant);
+    
+    // Find this variant in mongoVariants (search all regions)
+    let targetOrigin = null;
+    let targetIndex = -1;
+    
+    if (mongoVariants) {
+      for (const [origin, regionData] of Object.entries(mongoVariants)) {
+        const combinations = regionData.variant_combinations || [];
+        const index = combinations.findIndex(combo => 
+          combo.variant_id === variantIdFromUrl || 
+          combo.sku === sqlVariant.ma_sku
+        );
+        
+        if (index !== -1) {
+          targetOrigin = origin;
+          targetIndex = index;
+          console.log(`✅ Found variant in region "${origin}" at index ${index}`);
+          break;
+        }
+      }
+    }
+    
+    if (!targetOrigin || targetIndex === -1) {
+      console.warn('⚠️ Variant not found in MongoDB data');
+      return;
+    }
+    
+    // Auto-select the site origin
+    const siteOriginSelect = document.getElementById('siteOriginSelect');
+    if (siteOriginSelect) {
+      siteOriginSelect.value = targetOrigin;
+      console.log('🎯 Auto-selected site_origin:', targetOrigin);
+      
+      // Trigger UI build
+      buildVariantsUI(targetOrigin);
+      setupVariantOptionListeners(targetOrigin);
+      
+      // Auto-select the variant directly without clicking (to avoid reload issues)
+      setTimeout(() => {
+        const variantButtons = document.querySelectorAll('.cps-variant-option');
+        const targetButton = variantButtons[targetIndex];
+        
+        if (targetButton) {
+          // Add active class manually
+          variantButtons.forEach(b => b.classList.remove('active'));
+          targetButton.classList.add('active');
+          
+          // Call displaySelectedVariant directly
+          displaySelectedVariant(targetOrigin, targetIndex);
+          console.log('✅ Auto-selected variant at index', targetIndex);
+        }
+      }, 100); // Small delay to ensure buttons are rendered
+    }
+  }
   
   // Get SQL original price for fallback
   const sqlOriginalPrice = {{#if product.sql_gia_niem_yet}}{{product.sql_gia_niem_yet}}{{else}}null{{/if}};
@@ -2295,8 +2427,12 @@ document.addEventListener('DOMContentLoaded', function() {
   if (siteOriginSelect) {
     siteOriginSelect.addEventListener('change', onSiteOriginChange);
     
-    // Auto-select first site_origin if only one exists
-    if (mongoVariants && Object.keys(mongoVariants).length === 1) {
+    // Auto-select variant from URL query parameter (from flash sale link)
+    autoSelectVariantFromUrl();
+    
+    // Auto-select first site_origin if only one exists (and no variant in URL)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (!urlParams.get('variant') && mongoVariants && Object.keys(mongoVariants).length === 1) {
       const firstOrigin = Object.keys(mongoVariants)[0];
       siteOriginSelect.value = firstOrigin;
       onSiteOriginChange();

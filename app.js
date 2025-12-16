@@ -1,4 +1,5 @@
 import express from 'express';
+import session from 'express-session';
 import { engine } from 'express-handlebars';
 import db from './server.js';
 import DataModel from './app/model/index.js';
@@ -86,6 +87,40 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 // Map legacy `/images` URL path to actual `public/image` folder
 app.use('/images', express.static(path.join(process.cwd(), 'public', 'image')));
+
+// Session middleware
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: false, // set true if using HTTPS
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
+}));
+
+// Authentication middleware
+function requireAuth(req, res, next) {
+    if (!req.session || !req.session.user) {
+        return res.redirect('/login?redirect=' + encodeURIComponent(req.originalUrl));
+    }
+    next();
+}
+
+// Admin authentication middleware (chỉ admin và super_admin)
+function requireAdmin(req, res, next) {
+    if (!req.session || !req.session.user) {
+        return res.redirect('/login?redirect=' + encodeURIComponent(req.originalUrl));
+    }
+    
+    const userRole = req.session.user.vai_tro;
+    if (userRole !== 'admin' && userRole !== 'super_admin') {
+        return res.status(403).send('Access Denied: Chỉ admin mới có quyền truy cập');
+    }
+    
+    next();
+}
 
 // Handlebars setup
 app.engine('handlebars', engine({
@@ -533,21 +568,70 @@ app.get('/', async (req, res) => {
     const allFlashSales = await DataModel.SQL.FlashSale.findAll();
     const now = new Date();
     
-    // Lọc flash sales: đang diễn ra hoặc sắp diễn ra
-    const relevantFlashSales = allFlashSales.filter(fs => {
-      const endDate = new Date(fs.ngay_ket_thuc);
-      return endDate >= now; // Chưa kết thúc
-    }).sort((a, b) => {
-      // Sắp xếp: active trước, sau đó theo ngày bắt đầu
-      const aStart = new Date(a.ngay_bat_dau);
-      const bStart = new Date(b.ngay_bat_dau);
-      const aIsActive = aStart <= now && new Date(a.ngay_ket_thuc) >= now;
-      const bIsActive = bStart <= now && new Date(b.ngay_ket_thuc) >= now;
+    console.log('🔥 Total Flash Sales in DB:', allFlashSales.length);
+    console.log('📋 All Flash Sales (before status update):', allFlashSales.map(fs => ({
+      id: fs.id,
+      ten: fs.ten_flash_sale,
+      bat_dau: fs.ngay_bat_dau,
+      ket_thuc: fs.ngay_ket_thuc,
+      trang_thai: fs.trang_thai
+    })));
+    
+    // ✅ TỰ ĐỘNG CẬP NHẬT TRẠNG THÁI FLASH SALE (CHỈ UPDATE DA_KET_THUC VÀ DANG_DIEN_RA)
+    for (const flashSale of allFlashSales) {
+      const startDate = new Date(flashSale.ngay_bat_dau);
+      const endDate = new Date(flashSale.ngay_ket_thuc);
+      let newStatus = flashSale.trang_thai;
       
-      if (aIsActive && !bIsActive) return -1;
-      if (!aIsActive && bIsActive) return 1;
-      return aStart - bStart;
+      if (endDate < now) {
+        // Đã kết thúc
+        newStatus = 'da_ket_thuc';
+      } else if (startDate <= now && endDate >= now) {
+        // Đang diễn ra
+        newStatus = 'dang_dien_ra';
+      }
+      // Không tự động update thành 'sap_dien_ra' vì nó không được phép trong DB constraint
+      // Admin sẽ set 'cho' hoặc 'sap_dien_ra' thủ công trong admin panel
+      
+      // Update nếu trạng thái thay đổi VÀ newStatus là giá trị hợp lệ
+      if (newStatus !== flashSale.trang_thai && (newStatus === 'da_ket_thuc' || newStatus === 'dang_dien_ra')) {
+        console.log(`🔄 Updating flash sale "${flashSale.ten_flash_sale}" status: ${flashSale.trang_thai} → ${newStatus}`);
+        try {
+          await DataModel.SQL.FlashSale.update(flashSale.id, {
+            trang_thai: newStatus
+          });
+          flashSale.trang_thai = newStatus; // Update in-memory object
+        } catch (error) {
+          console.error(`❌ Failed to update flash sale status:`, error);
+        }
+      }
+    }
+    
+    console.log('📋 All Flash Sales (after status update):', allFlashSales.map(fs => ({
+      id: fs.id,
+      ten: fs.ten_flash_sale,
+      trang_thai: fs.trang_thai
+    })));
+    
+    // Hiển thị tất cả flash sales (bao gồm cả đã kết thúc)
+    const relevantFlashSales = allFlashSales.sort((a, b) => {
+      // Sắp xếp: đang diễn ra → sắp diễn ra → đã kết thúc
+      const statusOrder = {
+        'dang_dien_ra': 1,
+        'sap_dien_ra': 2,
+        'da_ket_thuc': 3
+      };
+      
+      const aOrder = statusOrder[a.trang_thai] || 4;
+      const bOrder = statusOrder[b.trang_thai] || 4;
+      
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      
+      // Cùng trạng thái thì sort theo ngày bắt đầu
+      return new Date(a.ngay_bat_dau) - new Date(b.ngay_bat_dau);
     });
+    
+    console.log('✅ Relevant Flash Sales after filter:', relevantFlashSales.length);
     
     // Xử lý từng Flash Sale
     const flashSaleEvents = [];
@@ -559,11 +643,16 @@ app.get('/', async (req, res) => {
         mo_ta: flashSale.mo_ta,
         ngay_bat_dau: flashSale.ngay_bat_dau,
         ngay_ket_thuc: flashSale.ngay_ket_thuc,
-        is_active: new Date(flashSale.ngay_bat_dau) <= now && new Date(flashSale.ngay_ket_thuc) >= now
+        trang_thai: flashSale.trang_thai,
+        is_active: flashSale.trang_thai === 'dang_dien_ra',
+        is_upcoming: flashSale.trang_thai === 'sap_dien_ra',
+        is_ended: flashSale.trang_thai === 'da_ket_thuc'
       };
       
       // ✅ Lấy các VARIANT flash sale từ SQL
       const items = await DataModel.SQL.FlashSaleItem.findByFlashSaleId(flashSale.id);
+      
+      console.log(`📦 Flash Sale "${flashSale.ten_flash_sale}" (${flashSale.id}): ${items?.length || 0} items`);
       
       // ✅ Enrich với thông tin từ SQL product_variants
       const enrichedItems = await Promise.all(items.map(async (item) => {
@@ -655,6 +744,8 @@ app.get('/', async (req, res) => {
           };
         });
       
+      console.log(`✅ Adding "${flashSale.ten_flash_sale}" with ${flashSaleItems.length} valid items`);
+      
       flashSaleEvents.push({
         info: flashSaleInfo,
         items: flashSaleItems
@@ -662,6 +753,10 @@ app.get('/', async (req, res) => {
     }
     
     console.log('🔥 Flash Sale Events Count:', flashSaleEvents.length);
+    console.log('📋 Flash Sale Events:', flashSaleEvents.map(e => ({
+      ten: e.info.ten_flash_sale,
+      items_count: e.items.length
+    })));
     
     // Tạo Set các product IDs có flash sale (từ flash sale items)
     const flashSaleProductIds = new Set();
@@ -751,10 +846,166 @@ app.get('/', async (req, res) => {
   }
 });
 
-// Trang admin dashboard
-app.get('/admin', (req, res) => {
+// ==========================================
+// AUTHENTICATION ROUTES
+// ==========================================
+
+// GET Login page
+app.get('/login', (req, res) => {
+    // Nếu đã đăng nhập, redirect về admin
+    if (req.session && req.session.user) {
+        const redirect = req.query.redirect || '/admin';
+        return res.redirect(redirect);
+    }
+    res.render('login_admin', { 
+        layout: false,
+        redirect: req.query.redirect || '/admin'
+    });
+});
+
+// POST Login - Xác thực tài khoản
+app.post('/login', async (req, res) => {
     try {
-        res.render('AD_Dashboard', { layout: 'AdminMain' , dashboardPage: true});
+        const { email, password } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Vui lòng nhập email và mật khẩu'
+            });
+        }
+
+        // Query user từ database
+        const request = new sql.Request();
+        const result = await request
+            .input('email', sql.NVarChar, email)
+            .query(`
+                SELECT id, email, ho_ten, vai_tro, mat_khau, trang_thai, vung_id
+                FROM users 
+                WHERE email = @email
+            `);
+
+        if (result.recordset.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: 'Email hoặc mật khẩu không đúng'
+            });
+        }
+
+        const user = result.recordset[0];
+
+        // Kiểm tra tài khoản có active không
+        if (!user.trang_thai) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tài khoản đã bị khóa'
+            });
+        }
+
+        // Kiểm tra vai trò (chỉ admin và super_admin)
+        if (user.vai_tro !== 'admin' && user.vai_tro !== 'super_admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Bạn không có quyền truy cập trang quản trị'
+            });
+        }
+
+        // Hash password input bằng SHA-256 để so sánh với DB
+        const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+        
+        console.log('🔐 Password comparison:', {
+            input: password,
+            hashedInput: hashedPassword,
+            dbHash: user.mat_khau,
+            match: hashedPassword === user.mat_khau
+        });
+
+        if (user.mat_khau !== hashedPassword) {
+            return res.status(401).json({
+                success: false,
+                message: 'Email hoặc mật khẩu không đúng'
+            });
+        }
+
+        // Tạo session
+        req.session.user = {
+            id: user.id,
+            email: user.email,
+            ho_ten: user.ho_ten,
+            vai_tro: user.vai_tro,
+            vung_id: user.vung_id
+        };
+
+        // Save session và redirect
+        req.session.save((err) => {
+            if (err) {
+                console.error('Session save error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Lỗi lưu phiên đăng nhập'
+                });
+            }
+
+            res.json({
+                success: true,
+                message: 'Đăng nhập thành công',
+                redirect: req.body.redirect || '/admin',
+                user: {
+                    email: user.email,
+                    ho_ten: user.ho_ten,
+                    vai_tro: user.vai_tro
+                }
+            });
+        });
+
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi server'
+        });
+    }
+});
+
+// Logout
+app.post('/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            console.error('Logout error:', err);
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi đăng xuất'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Đăng xuất thành công'
+        });
+    });
+});
+
+// GET Logout (alternative)
+app.get('/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            console.error('Logout error:', err);
+        }
+        res.redirect('/login');
+    });
+});
+
+// ==========================================
+// ADMIN ROUTES (Require Authentication)
+// ==========================================
+
+// Trang admin dashboard
+app.get('/admin', requireAdmin, (req, res) => {
+    try {
+        res.render('AD_Dashboard', { 
+            layout: 'AdminMain',
+            dashboardPage: true,
+            user: req.session.user
+        });
     } catch (err) {
         res.status(500).send('Lỗi server!');
     }
@@ -1091,7 +1342,11 @@ app.post('/api/cart', async (req, res) => {
             return res.json({
                 success: true,
                 message: 'Đã cập nhật số lượng trong giỏ hàng',
-                existed: true
+                existed: true,
+                data: {
+                    cartItemId: existingItem.id,
+                    cartId: cartId
+                }
             });
         } else {
             // Chưa có trong giỏ -> INSERT mới
@@ -1105,12 +1360,28 @@ app.post('/api/cart', async (req, res) => {
                     VALUES (@cartId, @variantId, @quantity)
                 `);
 
-            console.log('✅ Added new item to cart');
+            // Lấy ID của item vừa thêm
+            const getItemRequest = new sql.Request();
+            const newItemResult = await getItemRequest
+                .input('cartId', sql.UniqueIdentifier, cartId)
+                .input('variantId', sql.UniqueIdentifier, variant_id)
+                .query(`
+                    SELECT TOP 1 id 
+                    FROM cart_items 
+                    WHERE gio_hang_id = @cartId AND variant_id = @variantId
+                `);
+
+            const cartItemId = newItemResult.recordset[0].id;
+            console.log('✅ Added new item to cart:', cartItemId);
 
             return res.json({
                 success: true,
                 message: 'Đã thêm vào giỏ hàng',
-                existed: false
+                existed: false,
+                data: {
+                    cartItemId: cartItemId,
+                    cartId: cartId
+                }
             });
         }
 
@@ -1119,6 +1390,66 @@ app.post('/api/cart', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Lỗi khi thêm vào giỏ hàng: ' + error.message
+        });
+    }
+});
+
+// POST /api/cart/reduce - Trừ 1 số lượng trong giỏ (dùng cho buy now khi không đặt hàng)
+app.post('/api/cart/reduce', async (req, res) => {
+    try {
+        const { cartItemId, userId } = req.body;
+        
+        if (!cartItemId || !userId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu thông tin'
+            });
+        }
+
+        console.log('📉 Reducing cart item quantity:', cartItemId);
+
+        const pool = await sql.connect(sqlConfig);
+        
+        // Kiểm tra số lượng hiện tại
+        const checkRequest = new sql.Request();
+        const checkResult = await checkRequest
+            .input('cartItemId', sql.UniqueIdentifier, cartItemId)
+            .query('SELECT so_luong FROM cart_items WHERE id = @cartItemId');
+        
+        if (checkResult.recordset.length === 0) {
+            return res.json({ success: true, message: 'Item not found' });
+        }
+
+        const currentQty = checkResult.recordset[0].so_luong;
+        
+        if (currentQty <= 1) {
+            // Xóa nếu số lượng <= 1
+            const deleteRequest = new sql.Request();
+            await deleteRequest
+                .input('cartItemId', sql.UniqueIdentifier, cartItemId)
+                .query('DELETE FROM cart_items WHERE id = @cartItemId');
+            
+            console.log('✅ Deleted cart item');
+        } else {
+            // Trừ 1
+            const updateRequest = new sql.Request();
+            await updateRequest
+                .input('cartItemId', sql.UniqueIdentifier, cartItemId)
+                .query('UPDATE cart_items SET so_luong = so_luong - 1 WHERE id = @cartItemId');
+            
+            console.log('✅ Reduced quantity by 1');
+        }
+
+        return res.json({
+            success: true,
+            message: 'Đã cập nhật giỏ hàng'
+        });
+
+    } catch (error) {
+        console.error('❌ Reduce cart error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
         });
     }
 });
@@ -2360,7 +2691,7 @@ function extractTechnicalSpecs(obj) {
 }
 
 // Route GET /admin/sanpham - Hiển thị trang quản lý sản phẩm - CẬP NHẬT CHO SCHEMA MỚI
-app.get('/admin/sanpham', async (req, res) => {
+app.get('/admin/sanpham', requireAdmin, async (req, res) => {
     try {
         console.log('🚀 Loading admin products page - NEW SCHEMA...');
         
@@ -6124,7 +6455,7 @@ const updatedUpload = multer({
 // =============================================
 
 // GET /admin/flashsale - Trang quản lý flash sale
-app.get('/admin/flashsale', async (req, res) => {
+app.get('/admin/flashsale', requireAdmin, async (req, res) => {
     try {
         res.render('flashsale', {
             layout: 'AdminMain',
@@ -6786,7 +7117,7 @@ app.patch('/api/flashsales/:id/detail/marketing', async (req, res) => {
 // =============================================
 
 // ===== RENDER PAGE =====
-app.get('/admin/diachi', async (req, res) => {
+app.get('/admin/diachi', requireAdmin, async (req, res) => {
     try {
         res.render('diachi', {
             layout: 'AdminMain',
@@ -7554,7 +7885,7 @@ app.delete('/api/wards/:id', async (req, res) => {
 // ===== USERS MANAGEMENT =====
 
 // Admin render route for Users management page
-app.get('/admin/nguoidung', async (req, res) => {
+app.get('/admin/nguoidung', requireAdmin, async (req, res) => {
     try {
         // Lấy danh sách users từ SQL
         const users = await DataModel.SQL.User.findAll();
@@ -7928,7 +8259,7 @@ app.put('/api/users/:id/detail', async (req, res) => {
 // ==================== INVENTORY & WAREHOUSE ROUTES ====================
 
 // GET /admin/inventory - Render inventory management page
-app.get('/admin/inventory', async (req, res) => {
+app.get('/admin/inventory', requireAdmin, async (req, res) => {
     try {
         console.log('🚀 Loading admin inventory page...');
         
@@ -7979,7 +8310,7 @@ app.get('/admin/inventory', async (req, res) => {
 // =============================================
 
 // GET /admin/donhang - Render order management page
-app.get('/admin/donhang', async (req, res) => {
+app.get('/admin/donhang', requireAdmin, async (req, res) => {
     try {
         console.log('🚀 Loading admin orders page...');
         
@@ -8684,7 +9015,8 @@ app.post('/api/flash-sales', async (req, res) => {
             ngay_bat_dau,
             ngay_ket_thuc,
             vung_id: vung_id || null,
-            trang_thai: trang_thai || 'cho'
+            trang_thai: trang_thai || 'cho',
+            nguoi_tao: req.session?.user?.id || null
         };
         
         console.log('🔨 Creating flash sale with data:', flashSaleData);
@@ -8931,7 +9263,11 @@ app.get('/api/flashsales/:id/items', async (req, res) => {
 // POST /api/flashsales - Create flash sale
 app.post('/api/flashsales', async (req, res) => {
     try {
-        const flashSale = await DataModel.SQL.FlashSale.create(req.body);
+        const flashSaleData = {
+            ...req.body,
+            nguoi_tao: req.session?.user?.id || null
+        };
+        const flashSale = await DataModel.SQL.FlashSale.create(flashSaleData);
         res.json({ success: true, data: flashSale });
     } catch (error) {
         console.error('Flash Sale POST Error:', error);
@@ -9228,7 +9564,7 @@ app.delete('/api/warehouses/:id', async (req, res) => {
 // =============================================
 
 // GET /admin/voucher - Render voucher management page
-app.get('/admin/voucher', async (req, res) => {
+app.get('/admin/voucher', requireAdmin, async (req, res) => {
     try {
         res.render('voucher', {
             layout: 'AdminMain',
@@ -9540,7 +9876,7 @@ app.post('/api/vouchers', async (req, res) => {
             for (const product of req.body.products) {
                 console.log('📝 Inserting product:', product);
                 
-                // Validate variantId
+                // Validate variantId (FK to product_variants table)
                 if (!product.variantId) {
                     console.error('❌ Missing variantId for product:', product);
                     throw new Error(`Product "${product.productName}" thiếu variant_id`);
@@ -9550,11 +9886,12 @@ app.post('/api/vouchers', async (req, res) => {
                 await insertRequest
                     .input('voucher_id', sql.UniqueIdentifier, newVoucher.id)
                     .input('san_pham_id', sql.UniqueIdentifier, product.variantId)
+                    .input('vung_id', sql.NVarChar(10), voucherData.vung_id)
                     .query(`
                         INSERT INTO voucher_products 
-                        (voucher_id, san_pham_id)
+                        (voucher_id, san_pham_id, vung_id)
                         VALUES 
-                        (@voucher_id, @san_pham_id)
+                        (@voucher_id, @san_pham_id, @vung_id)
                     `);
             }
             
@@ -9674,21 +10011,41 @@ app.put('/api/vouchers/:id', async (req, res) => {
             for (const product of req.body.products) {
                 console.log('📝 Inserting product:', product);
                 
-                // Validate variantId
+                // Validate variantId (FK to product_variants table)
                 if (!product.variantId) {
                     console.error('❌ Missing variantId for product:', product);
                     throw new Error(`Product "${product.productName}" thiếu variant_id`);
+                }
+                
+                // Verify variant exists and check site_origin matches voucher's vung_id
+                const verifyRequest = new sql.Request();
+                const variantCheck = await verifyRequest
+                    .input('variant_id', sql.UniqueIdentifier, product.variantId)
+                    .query(`SELECT id, site_origin FROM product_variants WHERE id = @variant_id`);
+                
+                if (variantCheck.recordset.length === 0) {
+                    throw new Error(`Variant ID ${product.variantId} không tồn tại trong product_variants`);
+                }
+                
+                const variant = variantCheck.recordset[0];
+                console.log('✅ Variant verified:', variant);
+                console.log('🔍 Voucher vung_id:', voucherData.vung_id, '| Variant site_origin:', variant.site_origin);
+                
+                // Check if variant's site_origin matches voucher's vung_id (for merge replication)
+                if (variant.site_origin !== voucherData.vung_id) {
+                    throw new Error(`Variant "${product.variantName}" thuộc vùng "${variant.site_origin}" không khớp với voucher vùng "${voucherData.vung_id}". Merge replication không cho phép.`);
                 }
                 
                 const insertRequest = new sql.Request();
                 await insertRequest
                     .input('voucher_id', sql.UniqueIdentifier, req.params.id)
                     .input('san_pham_id', sql.UniqueIdentifier, product.variantId)
+                    .input('vung_id', sql.NVarChar(10), voucherData.vung_id)
                     .query(`
                         INSERT INTO voucher_products 
-                        (voucher_id, san_pham_id)
+                        (voucher_id, san_pham_id, vung_id)
                         VALUES 
-                        (@voucher_id, @san_pham_id)
+                        (@voucher_id, @san_pham_id, @vung_id)
                     `);
             }
             
@@ -10161,37 +10518,102 @@ app.post('/api/orders', async (req, res) => {
                 
                 console.log('✅ Inventory update result - rows affected:', inventoryUpdateResult.rowsAffected[0]);
 
-                // 6. Delete from cart
+                // 6. Update cart - Trừ số lượng đã đặt (chỉ trừ nếu đủ)
                 if (item.cart_item_id) {
-                    const deleteCartRequest = new sql.Request(transaction);
-                    await deleteCartRequest
+                    // Lấy số lượng hiện tại trong giỏ
+                    const checkCartRequest = new sql.Request(transaction);
+                    const cartItemCheck = await checkCartRequest
                         .input('cart_item_id', sql.UniqueIdentifier, item.cart_item_id)
-                        .query('DELETE FROM cart_items WHERE id = @cart_item_id');
+                        .query('SELECT so_luong FROM cart_items WHERE id = @cart_item_id');
+                    
+                    if (cartItemCheck.recordset.length > 0) {
+                        const currentQty = cartItemCheck.recordset[0].so_luong;
+                        const orderedQty = parseInt(item.so_luong);
+                        
+                        // Chỉ lấy tối đa số lượng có trong giỏ (mua ngay luôn lấy 1)
+                        const qtyToDeduct = Math.min(orderedQty, currentQty);
+                        
+                        if (qtyToDeduct >= currentQty) {
+                            // Xóa item nếu lấy hết
+                            const deleteRequest = new sql.Request(transaction);
+                            await deleteRequest
+                                .input('cart_item_id', sql.UniqueIdentifier, item.cart_item_id)
+                                .query('DELETE FROM cart_items WHERE id = @cart_item_id');
+                        } else {
+                            // Trừ số lượng
+                            const updateCartRequest = new sql.Request(transaction);
+                            await updateCartRequest
+                                .input('cart_item_id', sql.UniqueIdentifier, item.cart_item_id)
+                                .input('qty_to_deduct', sql.Int, qtyToDeduct)
+                                .query(`
+                                    UPDATE cart_items 
+                                    SET so_luong = so_luong - @qty_to_deduct
+                                    WHERE id = @cart_item_id AND so_luong >= @qty_to_deduct
+                                `);
+                        }
+                    }
                 }
 
                 // 7. Update stock in MongoDB (optional - for compatibility)
                 try {
-                    const allProducts = await DataModel.Mongo.ProductDetail.find({}).lean();
+                    console.log('🔄 Updating MongoDB stock for variant:', item.variant_id);
                     
-                    for (const doc of allProducts) {
-                        const combinations = doc.variants?.variant_combinations || [];
-                        const variantIndex = combinations.findIndex(v => 
-                            v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
-                        );
+                    // Query variant info from SQL to get site_origin and product_id
+                    const variantInfoRequest = new sql.Request(transaction);
+                    const variantInfo = await variantInfoRequest
+                        .input('variant_id', sql.UniqueIdentifier, item.variant_id)
+                        .query(`
+                            SELECT pv.site_origin, p.id as san_pham_id
+                            FROM product_variants pv
+                            INNER JOIN products p ON pv.san_pham_id = p.id
+                            WHERE pv.id = @variant_id
+                        `);
+                    
+                    if (variantInfo.recordset.length > 0) {
+                        const { site_origin, san_pham_id } = variantInfo.recordset[0];
+                        console.log('📍 Variant region:', site_origin, 'Product ID:', san_pham_id);
                         
-                        if (variantIndex !== -1) {
-                            const currentStock = combinations[variantIndex].stock || 0;
-                            const newStock = Math.max(0, currentStock - item.so_luong);
-                            
-                            await DataModel.Mongo.ProductDetail.updateOne(
-                                { _id: doc._id },
-                                { $set: { [`variants.variant_combinations.${variantIndex}.stock`]: newStock } }
+                        // Find product in MongoDB by sql_product_id
+                        const product = await DataModel.Mongo.ProductDetail.findOne({ 
+                            sql_product_id: san_pham_id 
+                        });
+                        
+                        if (product && product.variants && product.variants[site_origin]) {
+                            const combinations = product.variants[site_origin].variant_combinations || [];
+                            const variantIndex = combinations.findIndex(v => 
+                                v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
                             );
-                            break;
+                            
+                            if (variantIndex !== -1) {
+                                const currentStock = combinations[variantIndex].stock || 0;
+                                const newStock = Math.max(0, currentStock - item.so_luong);
+                                
+                                console.log('📦 MongoDB stock update:', {
+                                    region: site_origin,
+                                    variantIndex,
+                                    currentStock,
+                                    orderQuantity: item.so_luong,
+                                    newStock
+                                });
+                                
+                                // Update stock in the correct region path
+                                await DataModel.Mongo.ProductDetail.updateOne(
+                                    { sql_product_id: san_pham_id },
+                                    { $set: { [`variants.${site_origin}.variant_combinations.${variantIndex}.stock`]: newStock } }
+                                );
+                                
+                                console.log('✅ MongoDB stock updated successfully');
+                            } else {
+                                console.log('⚠️ Variant not found in MongoDB region:', site_origin);
+                            }
+                        } else {
+                            console.log('⚠️ Product not found in MongoDB or region not exists:', san_pham_id, site_origin);
                         }
+                    } else {
+                        console.log('⚠️ Variant info not found in SQL:', item.variant_id);
                     }
                 } catch (mongoError) {
-                    console.error('Error updating MongoDB stock:', mongoError);
+                    console.error('❌ Error updating MongoDB stock:', mongoError);
                     // Don't rollback transaction for MongoDB failure
                 }
             }
@@ -10803,7 +11225,9 @@ app.put('/api/shipping-methods/:id', async (req, res) => {
             trangThaiBit = 0;
         }
         
-        const result = await new sql.Request()
+        const request = new sql.Request();
+        
+        const result = await request
             .input('id', sql.UniqueIdentifier, id)
             .input('ten_phuong_thuc', sql.NVarChar(100), ten_phuong_thuc)
             .input('mo_ta', sql.NVarChar(500), mo_ta || null)
@@ -11054,10 +11478,21 @@ app.put('/api/shipping-method-regions/:id', async (req, res) => {
             trangThaiBit = 0;
         }
         
-        const result = await new sql.Request()
+        // Parse thoi_gian as INT (nullable)
+        let thoiGianInt = null;
+        if (thoiGian !== null && thoiGian !== undefined && thoiGian !== '') {
+            const parsed = parseInt(thoiGian);
+            if (!isNaN(parsed)) {
+                thoiGianInt = parsed;
+            }
+        }
+        
+        const request = new sql.Request();
+        
+        const result = await request
             .input('id', sql.UniqueIdentifier, id)
             .input('chi_phi_van_chuyen', sql.Decimal(15, 2), giaCuoi)
-            .input('thoi_gian_giao_du_kien', sql.NVarChar(100), thoiGian || null)
+            .input('thoi_gian_giao_du_kien', sql.Int, thoiGianInt)
             .input('trang_thai', sql.Bit, trangThaiBit)
             .query(`
                 UPDATE shipping_method_regions

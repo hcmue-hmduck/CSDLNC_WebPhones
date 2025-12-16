@@ -144,24 +144,26 @@
     .order-header h1 {
         font-size: 28px;
         font-weight: 700;
-        color: #1f2937;
+        color: var(--cps-dark);
         display: flex;
         align-items: center;
         gap: 10px;
     }
 
     .order-header h1 i {
-        color: #667eea;
+        color: var(--cps-red);
     }
 
     .btn-back {
         padding: 10px 20px;
         background: white;
-        color: #667eea;
-        border: 2px solid #667eea;
+        color: var(--cps-red);
+        border: 2px solid var(--cps-red);
         border-radius: 8px;
         text-decoration: none;
         font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
         transition: all 0.3s ease;
         display: inline-flex;
         align-items: center;
@@ -169,8 +171,10 @@
     }
 
     .btn-back:hover {
-        background: #667eea;
+        background: var(--cps-red);
         color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(215, 0, 24, 0.3);
     }
 
     .order-content {
@@ -189,7 +193,7 @@
     .status-card h3, .info-card h3, .items-card h3, .summary-card h3, .note-card h3 {
         font-size: 20px;
         font-weight: 700;
-        color: #1f2937;
+        color: var(--cps-dark);
         margin-bottom: 20px;
         display: flex;
         align-items: center;
@@ -197,7 +201,7 @@
     }
 
     .status-card h3 i, .info-card h3 i, .items-card h3 i, .summary-card h3 i, .note-card h3 i {
-        color: #667eea;
+        color: var(--cps-red);
     }
 
     /* Status Timeline */
@@ -209,12 +213,14 @@
     }
 
     .order-code {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, var(--cps-red) 0%, var(--cps-red-dark) 100%);
         color: white;
         padding: 8px 16px;
         border-radius: 20px;
         font-weight: 700;
         font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
 
     .status-timeline {
@@ -259,9 +265,9 @@
     }
 
     .timeline-item.active .timeline-icon {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, var(--cps-red) 0%, var(--cps-red-dark) 100%);
         color: white;
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 4px 12px rgba(215, 0, 24, 0.4);
     }
 
     .timeline-content h4 {
@@ -277,7 +283,7 @@
     }
 
     .timeline-item.active .timeline-content h4 {
-        color: #667eea;
+        color: var(--cps-red);
         font-weight: 700;
     }
 
@@ -323,7 +329,7 @@
     }
 
     .recipient-phone {
-        color: #667eea;
+        color: var(--cps-red);
         font-weight: 600;
     }
 
@@ -385,7 +391,7 @@
     .item-total-price {
         font-size: 16px;
         font-weight: 700;
-        color: #667eea;
+        color: var(--cps-red);
     }
 
     /* Summary */
@@ -420,14 +426,14 @@
 
     .summary-row.total {
         padding-top: 15px;
-        border-top: 2px solid #667eea;
+        border-top: 2px solid var(--cps-red);
         margin-top: 10px;
     }
 
     .summary-row.total span {
         font-size: 20px;
         font-weight: 700;
-        color: #667eea;
+        color: var(--cps-red);
     }
 
     .discount {
@@ -492,7 +498,7 @@
                     <p>Cảm ơn bạn đã đặt hàng tại WebPhones</p>
                 `,
                 confirmButtonText: 'Xem chi tiết',
-                confirmButtonColor: '#667eea',
+                confirmButtonColor: '#d70018',
                 timer: 5000,
                 timerProgressBar: true
             });
@@ -523,7 +529,7 @@
                 icon: 'error',
                 title: 'Lỗi',
                 text: 'Không thể tải thông tin đơn hàng. Vui lòng thử lại sau.',
-                confirmButtonColor: '#667eea'
+                confirmButtonColor: '#d70018'
             });
         }
     }

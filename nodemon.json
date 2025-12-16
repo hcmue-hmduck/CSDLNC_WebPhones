@@ -1,5 +1,5 @@
 {
-  "watch": ["views", "public", "routes", "app.js"],
-  "ext": "js handlebars css",
-  "exec": "node app.js"
+  "watch": ["app.js"],
+  "ignore": ["views/**", "public/**", "node_modules/**"],
+  "ext": "js"
 }

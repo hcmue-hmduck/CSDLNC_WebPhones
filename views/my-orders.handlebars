@@ -47,10 +47,27 @@
 </div>
 
 <style>
+    :root {
+        --cps-red: #d70018;
+        --cps-red-dark: #b8000f;
+        --cps-red-light: #ff0033;
+        --cps-dark: #1a1a1a;
+        --cps-gray: #666666;
+        --cps-light-gray: #f5f5f5;
+        --cps-border: #e0e0e0;
+    }
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
     .orders-container {
         min-height: 100vh;
-        background: #f3f4f6;
+        background: var(--cps-light-gray);
         padding: 30px 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     }
 
     .container {
@@ -61,74 +78,92 @@
 
     .orders-header {
         margin-bottom: 30px;
+        padding-bottom: 20px;
+        border-bottom: 2px solid var(--cps-border);
     }
 
     .orders-header h1 {
         font-size: 28px;
         font-weight: 700;
-        color: #1f2937;
+        color: var(--cps-dark);
         display: flex;
         align-items: center;
         gap: 12px;
     }
 
     .orders-header h1 i {
-        color: #667eea;
+        color: var(--cps-red);
     }
 
     /* Filter Tabs */
     .filter-tabs {
         display: flex;
-        gap: 10px;
+        gap: 8px;
         margin-bottom: 25px;
         overflow-x: auto;
         padding-bottom: 5px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--cps-red) transparent;
+    }
+
+    .filter-tabs::-webkit-scrollbar {
+        height: 4px;
+    }
+
+    .filter-tabs::-webkit-scrollbar-thumb {
+        background: var(--cps-red);
+        border-radius: 2px;
     }
 
     .filter-tab {
-        padding: 12px 24px;
+        padding: 10px 20px;
         background: white;
-        border: 2px solid #e5e7eb;
-        border-radius: 25px;
+        border: 1px solid var(--cps-border);
+        border-radius: 20px;
         font-weight: 600;
         font-size: 14px;
-        color: #6b7280;
+        color: var(--cps-gray);
         cursor: pointer;
         transition: all 0.3s ease;
         white-space: nowrap;
         display: flex;
         align-items: center;
         gap: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     }
 
     .filter-tab:hover {
-        border-color: #667eea;
-        color: #667eea;
+        border-color: var(--cps-red);
+        color: var(--cps-red);
+        box-shadow: 0 2px 6px rgba(215, 0, 24, 0.15);
     }
 
     .filter-tab.active {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--cps-red);
         color: white;
-        border-color: transparent;
+        border-color: var(--cps-red);
+        box-shadow: 0 2px 8px rgba(215, 0, 24, 0.3);
     }
 
     /* Orders List */
     .orders-list {
         display: flex;
         flex-direction: column;
-        gap: 20px;
+        gap: 16px;
     }
 
     .order-card {
         background: white;
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 20px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        border: 1px solid var(--cps-border);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
         transition: all 0.3s ease;
     }
 
     .order-card:hover {
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        border-color: var(--cps-red);
     }
 
     .order-card-header {
@@ -136,7 +171,7 @@
         justify-content: space-between;
         align-items: center;
         padding-bottom: 15px;
-        border-bottom: 1px solid #e5e7eb;
+        border-bottom: 1px solid var(--cps-border);
         margin-bottom: 15px;
         flex-wrap: wrap;
         gap: 10px;
@@ -151,12 +186,12 @@
 
     .order-code {
         font-weight: 700;
-        color: #1f2937;
+        color: var(--cps-red);
         font-size: 16px;
     }
 
     .order-date {
-        color: #6b7280;
+        color: var(--cps-gray);
         font-size: 14px;
     }
 
@@ -222,27 +257,27 @@
 
     .item-name {
         font-weight: 600;
-        color: #1f2937;
+        color: var(--cps-dark);
         margin-bottom: 4px;
         font-size: 14px;
     }
 
     .item-variant {
-        color: #6b7280;
+        color: var(--cps-gray);
         font-size: 13px;
         margin-bottom: 4px;
     }
 
     .item-quantity {
-        color: #9ca3af;
+        color: #999;
         font-size: 13px;
     }
 
     .item-price {
         text-align: right;
-        color: #667eea;
+        color: var(--cps-red);
         font-weight: 700;
-        font-size: 14px;
+        font-size: 15px;
     }
 
     .order-card-footer {
@@ -250,7 +285,7 @@
         justify-content: space-between;
         align-items: center;
         padding-top: 15px;
-        border-top: 1px solid #e5e7eb;
+        border-top: 1px solid var(--cps-border);
         flex-wrap: wrap;
         gap: 15px;
     }
@@ -262,14 +297,15 @@
     }
 
     .total-label {
-        color: #6b7280;
+        color: var(--cps-gray);
         font-size: 14px;
+        font-weight: 500;
     }
 
     .total-amount {
-        font-size: 20px;
+        font-size: 22px;
         font-weight: 700;
-        color: #667eea;
+        color: var(--cps-red);
     }
 
     .order-actions {
@@ -278,40 +314,49 @@
     }
 
     .btn-view-detail {
-        padding: 10px 20px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 10px 24px;
+        background: var(--cps-red);
         color: white;
         border: none;
-        border-radius: 8px;
-        font-weight: 600;
+        border-radius: 6px;
+        font-weight: 700;
         cursor: pointer;
         transition: all 0.3s ease;
         text-decoration: none;
         display: inline-flex;
         align-items: center;
         gap: 8px;
+        text-transform: uppercase;
+        font-size: 13px;
+        letter-spacing: 0.3px;
+        box-shadow: 0 2px 6px rgba(215, 0, 24, 0.3);
     }
 
     .btn-view-detail:hover {
+        background: var(--cps-red-dark);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 4px 12px rgba(215, 0, 24, 0.4);
         color: white;
     }
 
     .btn-cancel {
-        padding: 10px 20px;
+        padding: 10px 24px;
         background: white;
-        color: #ef4444;
-        border: 2px solid #ef4444;
-        border-radius: 8px;
+        color: #999;
+        border: 1px solid var(--cps-border);
+        border-radius: 6px;
         font-weight: 600;
         cursor: pointer;
         transition: all 0.3s ease;
+        text-transform: uppercase;
+        font-size: 13px;
+        letter-spacing: 0.3px;
     }
 
     .btn-cancel:hover {
-        background: #ef4444;
-        color: white;
+        background: #f8f8f8;
+        color: #666;
+        border-color: #ccc;
     }
 
     /* Loading & Empty States */
@@ -319,24 +364,26 @@
         text-align: center;
         padding: 60px 20px;
         background: white;
-        border-radius: 12px;
+        border-radius: 8px;
+        border: 1px solid var(--cps-border);
     }
 
     .loading-state i, .empty-state i {
         font-size: 64px;
-        color: #667eea;
+        color: var(--cps-red);
         margin-bottom: 20px;
+        opacity: 0.7;
     }
 
     .empty-state h3 {
         font-size: 24px;
         font-weight: 700;
-        color: #1f2937;
+        color: var(--cps-dark);
         margin-bottom: 10px;
     }
 
     .empty-state p {
-        color: #6b7280;
+        color: var(--cps-gray);
         margin-bottom: 25px;
     }
 
@@ -345,17 +392,21 @@
         align-items: center;
         gap: 10px;
         padding: 14px 32px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--cps-red);
         color: white;
-        border-radius: 12px;
-        font-weight: 600;
+        border-radius: 6px;
+        font-weight: 700;
         text-decoration: none;
         transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        box-shadow: 0 4px 12px rgba(215, 0, 24, 0.3);
     }
 
     .btn-shop-now:hover {
+        background: var(--cps-red-dark);
         transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 6px 16px rgba(215, 0, 24, 0.4);
         color: white;
     }
 

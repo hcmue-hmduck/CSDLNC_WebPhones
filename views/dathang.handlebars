@@ -1348,11 +1348,60 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Get cart items from URL params
   const urlParams = new URLSearchParams(window.location.search);
   const cartItemIds = urlParams.get('items')?.split(',') || [];
+  const isBuyNowMode = urlParams.get('buynow') === '1';
 
   if (cartItemIds.length === 0) {
     alert('Không có sản phẩm nào để thanh toán');
     window.location.href = '/cart';
     return;
+  }
+  
+  // Đánh dấu đơn hàng chưa được đặt
+  window.orderPlaced = false;
+  let reduceExecuted = false; // Đảm bảo chỉ trừ 1 lần
+  
+  // Nếu là buy now mode, khi rời trang mà chưa đặt hàng thì trừ 1 số lượng
+  if (isBuyNowMode && cartItemIds.length > 0) {
+    const cartItemId = cartItemIds[0];
+    
+    const reduceCartQuantity = function() {
+      if (!window.orderPlaced && !reduceExecuted) {
+        reduceExecuted = true;
+        console.log('🔄 Auto reducing cart quantity by 1');
+        
+        // Dùng fetch với keepalive thay vì sendBeacon để gửi JSON đúng
+        fetch('/api/cart/reduce', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cartItemId: cartItemId,
+            userId: AuthHelper.getUserId()
+          }),
+          keepalive: true // Đảm bảo request được gửi dù trang đã unload
+        }).catch(err => console.error('Error reducing cart:', err));
+      }
+    };
+    
+    // Bắt nhiều events để cover mọi trường hợp rời trang
+    window.addEventListener('beforeunload', reduceCartQuantity);
+    window.addEventListener('pagehide', reduceCartQuantity);
+    
+    // Bắt khi click vào link/button để chuyển trang (trừ nút đặt hàng)
+    document.addEventListener('click', function(e) {
+      const target = e.target.closest('a, button');
+      if (target) {
+        const isPlaceOrderBtn = target.id === 'placeOrderBtn' || target.closest('#placeOrderBtn');
+        const isInternalNavigation = target.getAttribute('href')?.startsWith('#');
+        
+        if (!isPlaceOrderBtn && !isInternalNavigation) {
+          // Delay một chút để browser có thời gian navigate
+          setTimeout(reduceCartQuantity, 0);
+        }
+      }
+    });
+    
+    // Bắt khi nhấn nút Back của browser
+    window.addEventListener('popstate', reduceCartQuantity);
   }
 
   // Utils
@@ -1940,6 +1989,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       
       if (result.success) {
         orderItems = result.data.items.filter(item => cartItemIds.includes(item.id));
+        
+        // Nếu là mua ngay, force số lượng = 1
+        if (isBuyNowMode && orderItems.length > 0) {
+          orderItems = orderItems.map(item => ({
+            ...item,
+            so_luong: 1
+          }));
+        }
+        
         renderOrderItems(orderItems);
         calculateSummary();
       }
@@ -2280,6 +2338,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       const result = await response.json();
 
       if (result.success) {
+        // Đánh dấu đã đặt hàng thành công (API đặt hàng đã lo việc trừ số lượng)
+        window.orderPlaced = true;
+        
         // Redirect to order detail page with success notification
         window.location.href = `/order-confirmation?orderId=${result.data.orderId}&orderCode=${result.data.orderCode}&new=true`;
       } else {

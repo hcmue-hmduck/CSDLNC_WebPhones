@@ -163,7 +163,7 @@
             </div>
             {{/if}}
 
-            <a href="/product/{{this.id}}" class="flash-product-link">
+            <a href="/product/{{this.product_id}}?variant={{this.id}}" class="flash-product-link">
               <!-- Hình ảnh -->
               <div class="flash-product-image">
                 <img src="{{this.link_anh}}" alt="{{this.ten_variant}}" loading="lazy">
@@ -205,10 +205,10 @@
 
             <!-- Nút hành động -->
             <div class="flash-actions">
-              <button class="flash-btn-cart" data-product-id="{{this.id}}" title="Thêm vào giỏ">
+              <button class="flash-btn-cart" data-product-id="{{this.product_id}}" data-variant-id="{{this.id}}" title="Thêm vào giỏ">
                 <i class="fas fa-shopping-cart"></i>
               </button>
-              <a href="/product/{{this.id}}" class="flash-btn-buy">
+              <a href="/product/{{this.product_id}}?variant={{this.id}}" class="flash-btn-buy">
                 <i class="fas fa-bolt"></i>
                 MUA NGAY
               </a>
@@ -2383,6 +2383,13 @@
       const targetTime = new Date(endTimeAttr || startTimeAttr).getTime();
       const isUpcoming = !!startTimeAttr;
       
+      // Guard against invalid time (NaN) to prevent infinite reload
+      if (isNaN(targetTime)) {
+        console.error('Invalid countdown time:', { endTimeAttr, startTimeAttr });
+        wrapper.innerHTML = '<div class="countdown-label" style="padding: 15px; font-size: 16px;">⏰ THỜI GIAN KHÔNG HỢP LỆ</div>';
+        return; // Exit early, don't set up interval
+      }
+      
       const daysEl = wrapper.querySelector('.countdown-days');
       const hoursEl = wrapper.querySelector('.countdown-hours');
       const minutesEl = wrapper.querySelector('.countdown-minutes');
@@ -2393,13 +2400,8 @@
         const distance = targetTime - now;
         
         if (distance < 0) {
-          if (isUpcoming) {
-            // Upcoming event has started, reload page to show active state
-            location.reload();
-          } else {
-            // Active event has ended
-            wrapper.innerHTML = '<div class="countdown-label" style="padding: 15px; font-size: 16px;">⏰ ĐÃ KẾT THÚC</div>';
-          }
+          // Active event has ended
+          wrapper.innerHTML = '<div class="countdown-label" style="padding: 15px; font-size: 16px;">⏰ ĐÃ KẾT THÚC</div>';
           return;
         }
         

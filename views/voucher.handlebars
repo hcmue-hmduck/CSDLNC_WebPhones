@@ -1973,6 +1973,27 @@
         display: block !important;
     }
 
+    /* Badge Styles */
+    .badge-success {
+        background: #e8f5e9;
+        color: #000000;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+    }
+
+    .badge-danger {
+        background: #ffebee;
+        color: #000000;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+    }
+
     /* Scrollbar Styling */
     .modal-premium .modal-body::-webkit-scrollbar,
     .table-responsive::-webkit-scrollbar {
@@ -2482,19 +2503,37 @@ function toggleScopeOptions() {
 
 async function loadProductsForSelection() {
     try {
+        // Lấy vùng của voucher
+        const voucherRegion = document.getElementById('voucherRegion').value;
+        
         const response = await fetch('/api/sanpham');
         if (!response.ok) throw new Error('Failed to load products');
         
         const data = await response.json();
         const products = data.data?.sanphams || data.sanphams || data;
         
+        // Filter products: chỉ lấy products có variants cho vùng này
+        const filteredProducts = products.filter(product => {
+            const variants = product.variants || [];
+            return variants.some(v => v.site_origin === voucherRegion);
+        });
+        
+        console.log('🌍 Voucher region:', voucherRegion);
+        console.log('📦 Total products:', products.length);
+        console.log('✅ Products with variants in region:', filteredProducts.length);
+        
         const productSelect = document.getElementById('productSelect');
         productSelect.innerHTML = '<option value="">-- Chọn sản phẩm để xem variants --</option>';
         
-        products.forEach(product => {
+        if (filteredProducts.length === 0) {
+            productSelect.innerHTML = '<option value="">Không có sản phẩm nào cho vùng này</option>';
+            return;
+        }
+        
+        filteredProducts.forEach(product => {
             const option = document.createElement('option');
             option.value = product.id;
-            option.textContent = `${product.ten_san_pham} (${product.ma_sku})`;
+            option.textContent = `${product.ten_san_pham} (${product.ma_san_pham})`;
             option.dataset.product = JSON.stringify(product);
             productSelect.appendChild(option);
         });
@@ -2509,54 +2548,42 @@ async function loadProductVariants(product) {
     try {
         currentProduct = product;
         
-        if (!product.mongo_detail_id) {
-            Swal.fire('Thông báo', `Sản phẩm "${product.ten_san_pham}" chưa có thông tin MongoDB`, 'info');
+        // Lấy vùng của voucher
+        const voucherRegion = document.getElementById('voucherRegion').value;
+        
+        // Lấy variants từ product data (đã được load từ /api/sanpham)
+        const sqlVariants = product.variants || [];
+        
+        // Filter variants theo vùng của voucher
+        const filteredVariants = sqlVariants.filter(v => v.site_origin === voucherRegion);
+        
+        if (filteredVariants.length === 0) {
+            Swal.fire('Thông báo', `Sản phẩm "${product.ten_san_pham}" không có variant cho vùng "${voucherRegion}"`, 'info');
             const variantsSection = document.getElementById('variantsSection');
             if (variantsSection) variantsSection.style.display = 'none';
             return;
         }
 
-        const mongoResponse = await fetch(`/api/mongodb-details/${product.mongo_detail_id}`);
-        if (!mongoResponse.ok) throw new Error('Failed to fetch MongoDB details');
-        
-        const mongoDetails = await mongoResponse.json();
-        let variantCombinations = mongoDetails.variant_combinations || [];
-        
-        if (variantCombinations.length === 0) {
-            Swal.fire('Thông báo', `Sản phẩm "${product.ten_san_pham}" chưa có variant`, 'info');
-            const variantsSection = document.getElementById('variantsSection');
-            if (variantsSection) variantsSection.style.display = 'none';
-            return;
-        }
-
-        // Map variants with product info and use variant_id from MongoDB
-        currentProductVariants = variantCombinations.map((v, index) => {
-            const variantId = v.variant_id || product.id;
-            const isDefault = v.is_default === true;
-            
+        // Map variants từ SQL structure
+        currentProductVariants = filteredVariants.map((v, index) => {
             return {
                 index: index,
-                variantId: variantId,  // MongoDB variant_id
-                productId: product.id,
+                variantId: v.id,  // SQL product_variants.id
+                productId: product.id,  // SQL products.id - dùng cho san_pham_id
                 productName: product.ten_san_pham,
-                variantName: v.name || (isDefault ? 'Mặc định' : `Variant ${index + 1}`),
-                attributes: v.attributes || {},
-                price: v.price || product.gia_ban || 0,
-                stock: v.stock || product.ton_kho || 0,
-                isDefault: isDefault,
-                link_avatar: mongoDetails.link_avatar || '/image/default-product.png'
+                variantName: v.ten_hien_thi || v.ma_sku || `Variant ${index + 1}`,
+                sku: v.ma_sku,
+                attributes: {}, // SQL không store attributes riêng
+                price: v.gia_ban || product.gia_ban || 0,
+                stock: v.so_luong_ton_kho || 0,
+                site_origin: v.site_origin,
+                link_avatar: product.link_anh_dai_dien || '/image/default-product.png'
             };
-        }).filter(v => !v.isDefault);
+        });
         
-        console.log('📦 Loaded variants from MongoDB:', currentProductVariants);
-        console.log('✅ Number of variants (excluding default):', currentProductVariants.length);
-        
-        if (currentProductVariants.length === 0) {
-            Swal.fire('Thông báo', `Sản phẩm "${product.ten_san_pham}" chỉ có variant mặc định`, 'info');
-            const variantsSection = document.getElementById('variantsSection');
-            if (variantsSection) variantsSection.style.display = 'none';
-            return;
-        }
+        console.log('📦 Loaded variants from SQL:', currentProductVariants);
+        console.log('🌍 Voucher region:', voucherRegion);
+        console.log('✅ Number of filtered variants:', currentProductVariants.length);
 
         renderVariantsTable();
         const variantsSection = document.getElementById('variantsSection');
@@ -2641,8 +2668,8 @@ function addVariantsToList() {
 
         if (!selectedProducts.has(variant.variantId)) {
             const variantData = {
-                variantId: variant.variantId,  // MongoDB variant_id
-                productId: variant.productId,
+                variantId: variant.variantId,  // SQL product_variants.id
+                productId: variant.productId,  // SQL products.id - quan trọng cho FK
                 productName: variant.productName,
                 variantName: variant.variantName,
                 attributes: variant.attributes,
@@ -2741,16 +2768,11 @@ async function saveVoucher() {
         const scope = document.getElementById('voucherScope').value;
         
         const productsArray = Array.from(selectedProducts.values()).map(item => ({
-            variantId: item.variantId,  // MongoDB variant_id
-            productId: item.productId,
+            productId: item.productId,      // SQL products.id - dùng cho san_pham_id (FK)
+            variantId: item.variantId,      // SQL product_variants.id - dùng cho bien_the_id
             productName: item.productName,
             variantName: item.variantName
         }));
-        
-        console.log('💾 Saving voucher...');
-        console.log('🏷️ Voucher ID:', voucherId || 'NEW');
-        console.log('📦 Products to save:', productsArray);
-        console.log('🔢 Number of products:', productsArray.length);
         
         const voucherData = {
             ma_voucher: document.getElementById('voucherCode').value,
@@ -2875,31 +2897,399 @@ async function viewVoucher(id) {
         const data = await response.json();
         const v = data.voucher;
         
+        // Calculate voucher statistics
+        const usagePercent = v.so_luong > 0 ? Math.round((v.da_su_dung || 0) / v.so_luong * 100) : 0;
+        const remainingQuantity = v.so_luong - (v.da_su_dung || 0);
+        
+        // Determine status and progress bar color
+        let progressColor = '#10b981'; // green
+        if (usagePercent >= 80) progressColor = '#ef4444'; // red
+        else if (usagePercent >= 50) progressColor = '#f59e0b'; // orange
+        
         const content = `
-            <div class="view-content">
-                <div class="view-section">
-                    <h3>Thông Tin Cơ Bản</h3>
-                    <div class="view-row"><div class="view-label">Mã:</div><div class="view-value"><span class="voucher-code">${v.ma_voucher}</span></div></div>
-                    <div class="view-row"><div class="view-label">Tên:</div><div class="view-value">${v.ten_voucher}</div></div>
-                    <div class="view-row"><div class="view-label">Mô tả:</div><div class="view-value">${v.mo_ta || 'Không có'}</div></div>
+            <style>
+                .voucher-detail-container {
+                    padding: 8px 0;
+                }
+                
+                .voucher-banner {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    padding: 32px;
+                    border-radius: 12px;
+                    color: white;
+                    margin-bottom: 24px;
+                    position: relative;
+                    overflow: hidden;
+                }
+                
+                .voucher-banner::before {
+                    content: '';
+                    position: absolute;
+                    top: -50%;
+                    right: -10%;
+                    width: 300px;
+                    height: 300px;
+                    background: rgba(255, 255, 255, 0.1);
+                    border-radius: 50%;
+                }
+                
+                .voucher-banner-content {
+                    position: relative;
+                    z-index: 1;
+                }
+                
+                .voucher-code-display {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 12px;
+                    background: rgba(255, 255, 255, 0.2);
+                    padding: 12px 20px;
+                    border-radius: 8px;
+                    border: 2px dashed white;
+                    margin-bottom: 16px;
+                }
+                
+                .voucher-code-display .code {
+                    font-size: 28px;
+                    font-weight: 700;
+                    letter-spacing: 2px;
+                }
+                
+                .voucher-code-display .copy-btn {
+                    background: white;
+                    color: #667eea;
+                    border: none;
+                    padding: 8px 12px;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    font-weight: 600;
+                    transition: all 0.3s;
+                }
+                
+                .voucher-code-display .copy-btn:hover {
+                    transform: scale(1.05);
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+                }
+                
+                .voucher-title {
+                    font-size: 24px;
+                    font-weight: 700;
+                    margin: 0 0 8px 0;
+                }
+                
+                .voucher-description {
+                    font-size: 16px;
+                    opacity: 0.95;
+                    margin: 0;
+                }
+                
+                .detail-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 20px;
+                    margin-bottom: 24px;
+                }
+                
+                .detail-card {
+                    background: #f9fafb;
+                    padding: 20px;
+                    border-radius: 12px;
+                    border: 1px solid #e5e7eb;
+                    transition: all 0.3s;
+                }
+                
+                .detail-card:hover {
+                    border-color: #667eea;
+                    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+                }
+                
+                .detail-card-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    margin-bottom: 16px;
+                    padding-bottom: 12px;
+                    border-bottom: 2px solid #e5e7eb;
+                }
+                
+                .detail-card-icon {
+                    width: 40px;
+                    height: 40px;
+                    background: linear-gradient(135deg, #667eea, #764ba2);
+                    border-radius: 10px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: white;
+                    font-size: 18px;
+                }
+                
+                .detail-card-title {
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #1f2937;
+                    margin: 0;
+                }
+                
+                .detail-item {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 10px 0;
+                    border-bottom: 1px solid #e5e7eb;
+                }
+                
+                .detail-item:last-child {
+                    border-bottom: none;
+                }
+                
+                .detail-label {
+                    font-size: 14px;
+                    color: #6b7280;
+                    font-weight: 500;
+                }
+                
+                .detail-value {
+                    font-size: 15px;
+                    color: #1f2937;
+                    font-weight: 600;
+                    text-align: right;
+                }
+                
+                .detail-value.highlight {
+                    color: #667eea;
+                    font-size: 18px;
+                }
+                
+                .usage-stats {
+                    background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+                    padding: 24px;
+                    border-radius: 12px;
+                    border: 1px solid #e5e7eb;
+                }
+                
+                .usage-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 16px;
+                }
+                
+                .usage-title {
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #1f2937;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                
+                .usage-percent {
+                    font-size: 24px;
+                    font-weight: 700;
+                    color: #667eea;
+                }
+                
+                .progress-bar-container {
+                    width: 100%;
+                    height: 12px;
+                    background: #e5e7eb;
+                    border-radius: 6px;
+                    overflow: hidden;
+                    margin-bottom: 12px;
+                }
+                
+                .progress-bar {
+                    height: 100%;
+                    background: ${progressColor};
+                    transition: width 0.5s ease;
+                    border-radius: 6px;
+                }
+                
+                .usage-info {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 14px;
+                    color: #6b7280;
+                }
+                
+                .badge-custom {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 12px;
+                    border-radius: 6px;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                
+                .badge-success {
+                    background: #d1fae5;
+                    color: #065f46;
+                }
+                
+                .badge-warning {
+                    background: #fef3c7;
+                    color: #92400e;
+                }
+                
+                .badge-danger {
+                    background: #fee2e2;
+                    color: #991b1b;
+                }
+                
+                .badge-info {
+                    background: #dbeafe;
+                    color: #1e40af;
+                }
+                
+                @media (max-width: 768px) {
+                    .detail-grid {
+                        grid-template-columns: 1fr;
+                    }
+                    
+                    .voucher-code-display .code {
+                        font-size: 20px;
+                    }
+                    
+                    .voucher-title {
+                        font-size: 20px;
+                    }
+                }
+            </style>
+            
+            <div class="voucher-detail-container">
+                <!-- Voucher Banner -->
+                <div class="voucher-banner">
+                    <div class="voucher-banner-content">
+                        <div class="voucher-code-display">
+                            <span class="code">${v.ma_voucher}</span>
+                            <button class="copy-btn" onclick="copyVoucherCode('${v.ma_voucher}')">
+                                <i class="fas fa-copy"></i> Sao chép
+                            </button>
+                        </div>
+                        <h2 class="voucher-title">${v.ten_voucher}</h2>
+                        <p class="voucher-description">${v.mo_ta || 'Áp dụng cho các sản phẩm được chọn'}</p>
+                    </div>
                 </div>
-                <div class="view-section">
-                    <h3>Giảm Giá</h3>
-                    <div class="view-row"><div class="view-label">Loại:</div><div class="view-value">${renderTypeBadge(v.loai_giam_gia)}</div></div>
-                    <div class="view-row"><div class="view-label">Giá trị:</div><div class="view-value"><span class="value-display">${formatDiscountValue(v)}</span></div></div>
-                    ${v.gia_tri_toi_da ? `<div class="view-row"><div class="view-label">Tối đa:</div><div class="view-value">${formatCurrency(v.gia_tri_toi_da)}</div></div>` : ''}
-                    <div class="view-row"><div class="view-label">Đơn tối thiểu:</div><div class="view-value">${formatCurrency(v.don_hang_toi_thieu)}</div></div>
+                
+                <!-- Detail Grid -->
+                <div class="detail-grid">
+                    <!-- Discount Info -->
+                    <div class="detail-card">
+                        <div class="detail-card-header">
+                            <div class="detail-card-icon">
+                                <i class="fas fa-percent"></i>
+                            </div>
+                            <h3 class="detail-card-title">Thông Tin Giảm Giá</h3>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Loại giảm giá</span>
+                            <span class="detail-value">${renderTypeBadge(v.loai_giam_gia)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Giá trị</span>
+                            <span class="detail-value highlight">${formatDiscountValue(v)}</span>
+                        </div>
+                        ${v.gia_tri_toi_da ? `
+                        <div class="detail-item">
+                            <span class="detail-label">Giảm tối đa</span>
+                            <span class="detail-value">${formatCurrency(v.gia_tri_toi_da)}</span>
+                        </div>` : ''}
+                        <div class="detail-item">
+                            <span class="detail-label">Đơn tối thiểu</span>
+                            <span class="detail-value">${formatCurrency(v.don_hang_toi_thieu)}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Scope & Region Info -->
+                    <div class="detail-card">
+                        <div class="detail-card-header">
+                            <div class="detail-card-icon">
+                                <i class="fas fa-globe"></i>
+                            </div>
+                            <h3 class="detail-card-title">Phạm Vi Áp Dụng</h3>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Phạm vi</span>
+                            <span class="detail-value">${renderScopeBadge(v.pham_vi)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Khu vực</span>
+                            <span class="detail-value">
+                                ${v.vung_id === 'bac' ? '<i class="fas fa-map-marker-alt"></i> Miền Bắc' : 
+                                  v.vung_id === 'trung' ? '<i class="fas fa-map-marker-alt"></i> Miền Trung' : 
+                                  '<i class="fas fa-map-marker-alt"></i> Miền Nam'}
+                            </span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Loại voucher</span>
+                            <span class="detail-value">${v.loai_voucher || 'Tổng quát'}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Time Info -->
+                    <div class="detail-card">
+                        <div class="detail-card-header">
+                            <div class="detail-card-icon">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                            <h3 class="detail-card-title">Thời Gian</h3>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Bắt đầu</span>
+                            <span class="detail-value">${formatDate(v.ngay_bat_dau)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Kết thúc</span>
+                            <span class="detail-value">${formatDate(v.ngay_ket_thuc)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Trạng thái</span>
+                            <span class="detail-value">${renderStatusBadge(v)}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Usage Stats Card -->
+                    <div class="detail-card">
+                        <div class="detail-card-header">
+                            <div class="detail-card-icon">
+                                <i class="fas fa-chart-line"></i>
+                            </div>
+                            <h3 class="detail-card-title">Thống Kê Sử Dụng</h3>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Tổng số lượng</span>
+                            <span class="detail-value highlight">${v.so_luong}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Đã sử dụng</span>
+                            <span class="detail-value" style="color: ${v.da_su_dung > 0 ? '#ef4444' : '#6b7280'};">${v.da_su_dung || 0}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Còn lại</span>
+                            <span class="detail-value" style="color: ${remainingQuantity > 0 ? '#10b981' : '#ef4444'};">${remainingQuantity}</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="view-section">
-                    <h3>Phạm Vi và Số Lượng</h3>
-                    <div class="view-row"><div class="view-label">Phạm vi:</div><div class="view-value">${renderScopeBadge(v.pham_vi)}</div></div>
-                    <div class="view-row"><div class="view-label">Số lượng:</div><div class="view-value">${v.da_su_dung || 0} / ${v.so_luong}</div></div>
-                </div>
-                <div class="view-section">
-                    <h3>Thời Gian</h3>
-                    <div class="view-row"><div class="view-label">Bắt đầu:</div><div class="view-value">${formatDate(v.ngay_bat_dau)}</div></div>
-                    <div class="view-row"><div class="view-label">Kết thúc:</div><div class="view-value">${formatDate(v.ngay_ket_thuc)}</div></div>
-                    <div class="view-row"><div class="view-label">Trạng thái:</div><div class="view-value">${renderStatusBadge(v)}</div></div>
+                
+                <!-- Usage Progress -->
+                <div class="usage-stats">
+                    <div class="usage-header">
+                        <div class="usage-title">
+                            <i class="fas fa-chart-pie"></i>
+                            Tỷ Lệ Sử Dụng
+                        </div>
+                        <div class="usage-percent">${usagePercent}%</div>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" style="width: ${usagePercent}%;"></div>
+                    </div>
+                    <div class="usage-info">
+                        <span><i class="fas fa-check-circle"></i> ${v.da_su_dung || 0} voucher đã sử dụng</span>
+                        <span><i class="fas fa-ticket-alt"></i> ${remainingQuantity} voucher còn lại</span>
+                    </div>
                 </div>
             </div>
         `;
@@ -2909,8 +3299,32 @@ async function viewVoucher(id) {
         modal.show();
         
     } catch (error) {
-        Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không thể tải thông tin' });
+        Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không thể tải thông tin voucher' });
     }
+}
+
+// Helper function to copy voucher code
+function copyVoucherCode(code) {
+    navigator.clipboard.writeText(code).then(() => {
+        Swal.fire({
+            icon: 'success',
+            title: 'Đã sao chép!',
+            text: 'Mã voucher đã được sao chép vào clipboard',
+            timer: 2000,
+            showConfirmButton: false,
+            toast: true,
+            position: 'top-end'
+        });
+    }).catch(() => {
+        Swal.fire({
+            icon: 'error',
+            title: 'Lỗi',
+            text: 'Không thể sao chép mã voucher',
+            timer: 2000,
+            toast: true,
+            position: 'top-end'
+        });
+    });
 }
 
 async function viewVoucherProducts(id) {

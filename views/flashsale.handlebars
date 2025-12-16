@@ -72,9 +72,10 @@
             <div class="filter-controls">
                 <select class="filter-select" id="statusFilter">
                     <option value="">Tất cả trạng thái</option>
-                    <option value="cho">🟡 Chờ diễn ra</option>
+                    <option value="sap_dien_ra">🟡 Sắp diễn ra</option>
                     <option value="dang_dien_ra">🟢 Đang diễn ra</option>
-                    <option value="ket_thuc">⚫ Kết thúc</option>
+                    <option value="da_ket_thuc">⚫ Đã kết thúc</option>
+                    <option value="cho">🔵 Chờ</option>
                 </select>
                 <select class="filter-select" id="regionFilter">
                     <option value="">Tất cả vùng</option>
@@ -180,9 +181,10 @@
                             <div class="form-group">
                                 <label for="trangThai" class="form-label">Trạng thái *</label>
                                 <select class="form-select" id="trangThai" required>
-                                    <option value="cho">Chờ diễn ra</option>
-                                    <option value="dang_dien_ra">Đang diễn ra</option>
-                                    <option value="ket_thuc">Kết thúc</option>
+                                    <option value="cho">🔵 Chờ</option>
+                                    <option value="sap_dien_ra">🟡 Sắp diễn ra</option>
+                                    <option value="dang_dien_ra">🟢 Đang diễn ra</option>
+                                    <option value="da_ket_thuc">⚫ Đã kết thúc</option>
                                 </select>
                             </div>
                         </div>
@@ -593,7 +595,7 @@
         display: flex;
         gap: 20px;
         align-items: center;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         box-shadow: var(--shadow);
         border: 1px solid var(--gray-200);
     }
@@ -604,8 +606,8 @@
         background: var(--gray-100);
         border-radius: 10px;
         padding: 12px 20px;
-        flex: 1;
-        min-width: 400px;
+        flex: 0 1 auto;
+        width: 1550px;
         border: 2px solid var(--gray-200);
         transition: var(--transition);
     }
@@ -649,20 +651,23 @@
     .filter-controls {
         display: flex;
         gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
+        align-items: stretch;
+        flex-wrap: nowrap;
+        flex: 1;
     }
 
     .filter-select {
-        padding: 10px 16px;
+        padding: 12px 20px;
         border: 2px solid var(--gray-200);
         border-radius: 8px;
         background: white;
         color: var(--gray-700);
-        min-width: 160px;
+        min-width: 180px;
+        flex: 1;
         cursor: pointer;
         transition: var(--transition);
         font-size: 0.9rem;
+        white-space: nowrap;
     }
 
     .filter-select:focus {
@@ -674,13 +679,17 @@
         background: none;
         border: 2px solid var(--gray-200);
         color: var(--gray-600);
-        padding: 10px 16px;
+        padding: 12px 24px;
         border-radius: 8px;
         cursor: pointer;
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         transition: var(--transition);
+        min-width: 140px;
+        justify-content: center;
+        font-weight: 500;
+        white-space: nowrap;
     }
 
     .clear-filters:hover {
@@ -1030,6 +1039,12 @@
     .badge-warning {
         background: rgba(245, 158, 11, 0.1);
         color: var(--warning);
+    }
+
+    .badge-info {
+        background: rgba(59, 130, 246, 0.1);
+        color: #3b82f6;
+        border: 1px solid rgba(59, 130, 246, 0.2);
     }
 
     .badge-secondary {
@@ -2277,20 +2292,39 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             currentProduct = product;
             
-            // Load variants từ SQL database (product_variants table)
-            const response = await fetch(`/api/product-variants/${product.id}`);
+            // Lấy vùng đã chọn từ form
+            const vungId = document.getElementById('vungId').value;
+            
+            if (!vungId) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Cảnh báo',
+                    text: 'Vui lòng chọn vùng trước khi chọn sản phẩm'
+                });
+                variantsSection.style.display = 'none';
+                return;
+            }
+            
+            // Load variants từ API sanpham (giống như voucher)
+            console.log(`🔍 Loading variants for product ${product.id} in region ${vungId}`);
+            const response = await fetch(`/api/sanpham/${product.id}/variants`);
             
             if (!response.ok) {
                 throw new Error('Failed to fetch product variants');
             }
             
             const data = await response.json();
-            const variants = Array.isArray(data) ? data : (data.data || data.variants || []);
+            let variants = Array.isArray(data) ? data : (data.data || data.variants || []);
             
-            console.log('📦 Product Variants từ SQL:', {
+            // Filter variants theo vùng
+            variants = variants.filter(v => v.site_origin === vungId);
+            
+            console.log('📦 Product Variants theo vùng:', {
+                vungId: vungId,
                 productId: product.id,
                 productName: product.ten_san_pham,
-                variantsCount: variants.length,
+                totalVariants: Array.isArray(data) ? data.length : (data.data || data.variants || []).length,
+                variantsInRegion: variants.length,
                 firstVariant: variants[0]
             });
             
@@ -2298,7 +2332,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 Swal.fire({
                     icon: 'info',
                     title: 'Thông báo',
-                    text: `Sản phẩm "${product.ten_san_pham}" chưa có variants`
+                    text: `Sản phẩm "${product.ten_san_pham}" không có variants trong vùng "${vungId}"`
                 });
                 variantsSection.style.display = 'none';
                 return;
@@ -2326,7 +2360,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 return mappedVariant;
             });
 
-            console.log('✅ Đã map', currentProductVariants.length, 'variants');
+            console.log('✅ Đã map', currentProductVariants.length, 'variants thuộc vùng', vungId);
             renderVariantsTable();
             variantsSection.style.display = 'block';
             
@@ -3063,9 +3097,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function getStatusText(status) {
         switch(status) {
-            case 'cho': return 'Chờ diễn ra';
+            case 'cho': return 'Chờ';
+            case 'sap_dien_ra': return 'Sắp diễn ra';
             case 'dang_dien_ra': return 'Đang diễn ra';
-            case 'ket_thuc': return 'Kết thúc';
+            case 'da_ket_thuc': return 'Đã kết thúc';
+            case 'ket_thuc': return 'Kết thúc'; // Legacy support
             default: return status;
         }
     }
@@ -3073,8 +3109,10 @@ document.addEventListener('DOMContentLoaded', function() {
     function getStatusClass(status) {
         switch(status) {
             case 'dang_dien_ra': return 'success';
-            case 'cho': return 'warning';
-            case 'ket_thuc': return 'secondary';
+            case 'sap_dien_ra': return 'warning';
+            case 'cho': return 'info';
+            case 'da_ket_thuc': return 'secondary';
+            case 'ket_thuc': return 'secondary'; // Legacy support
             default: return 'secondary';
         }
     }
@@ -3082,8 +3120,10 @@ document.addEventListener('DOMContentLoaded', function() {
     function getStatusIcon(status) {
         switch(status) {
             case 'dang_dien_ra': return 'fas fa-play-circle';
-            case 'cho': return 'fas fa-clock';
-            case 'ket_thuc': return 'fas fa-check-circle';
+            case 'sap_dien_ra': return 'far fa-clock';
+            case 'cho': return 'fas fa-hourglass-half';
+            case 'da_ket_thuc': return 'fas fa-times-circle';
+            case 'ket_thuc': return 'fas fa-check-circle'; // Legacy support
             default: return 'fas fa-circle';
         }
     }

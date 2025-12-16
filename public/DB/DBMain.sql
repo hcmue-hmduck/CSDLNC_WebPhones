@@ -391,9 +391,11 @@ CREATE TABLE voucher_products (
     id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
     voucher_id UNIQUEIDENTIFIER NOT NULL,
     san_pham_id UNIQUEIDENTIFIER NOT NULL,
+    vung_id NVARCHAR(10) NOT NULL CHECK (vung_id IN (N'bac', N'trung', N'nam')),
     ngay_tao DATETIME2 DEFAULT GETDATE(),
     FOREIGN KEY (voucher_id) REFERENCES vouchers(id) ON DELETE CASCADE,
-    FOREIGN KEY (san_pham_id) REFERENCES products(id),
+    FOREIGN KEY (san_pham_id) REFERENCES product_variants(id),
+    FOREIGN KEY (vung_id) REFERENCES regions(ma_vung),
     CONSTRAINT UQ_voucher_products_voucher_sanpham UNIQUE (voucher_id, san_pham_id)
 );
 GO
