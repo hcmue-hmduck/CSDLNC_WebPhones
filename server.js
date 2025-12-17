@@ -7,8 +7,8 @@ dotenv.config();
 
 // Cấu hình SQL Server từ biến môi trường
 const dbConfig = {
-  server: process.env.SQL_SERVER_NAM || 'localhost',
-  database: process.env.SQL_DATABASE_NAM || 'CSDLNC_WebPhone',
+  server: process.env.SQL_SERVER || 'localhost',
+  database: process.env.SQL_DATABASE || 'CSDLNC_WebPhone',
   user: process.env.SQL_USER || 'sa',
   password: process.env.SQL_PASSWORD,
   options: {
@@ -33,6 +33,51 @@ async function connectSQLDB() {
     return sql;
   } catch (err) {
     console.error('SQL Server connection error:', err);
+    throw err;
+  }
+}
+
+// Chuyển đổi kết nối SQL Server dựa trên vùng
+async function switchDatabaseByRegion(vungId) {
+  try {
+    let newConfig = { ...dbConfig };
+    
+    // Chuẩn hóa vungId về lowercase nếu là string
+    const normalizedVungId = typeof vungId === 'string' ? vungId.toLowerCase() : vungId;
+    
+    console.log('🔍 Normalized vungId:', normalizedVungId);
+    
+    // Check cả string và số
+    if (normalizedVungId === 'bac' || normalizedVungId === 1 || normalizedVungId === '1') {
+      // Miền Bắc
+      newConfig.server = process.env.SQL_SERVER_BAC || process.env.SQL_SERVER;
+      newConfig.database = process.env.SQL_DATABASE_BAC || process.env.SQL_DATABASE;
+      console.log('🔄 Switching to Miền Bắc database');
+    } else if (normalizedVungId === 'trung' || normalizedVungId === 2 || normalizedVungId === '2') {
+      // Miền Trung
+      newConfig.server = process.env.SQL_SERVER_TRUNG || process.env.SQL_SERVER;
+      newConfig.database = process.env.SQL_DATABASE_TRUNG || process.env.SQL_DATABASE;
+      console.log('🔄 Switching to Miền Trung database');
+    } else if (normalizedVungId === 'nam' || normalizedVungId === 3 || normalizedVungId === '3') {
+      // Miền Nam
+      newConfig.server = process.env.SQL_SERVER_NAM || process.env.SQL_SERVER;
+      newConfig.database = process.env.SQL_DATABASE_NAM || process.env.SQL_DATABASE;
+      console.log('🔄 Switching to Miền Nam database');
+    } else {
+      // Mặc định
+      console.log('🔄 Using default database');
+    }
+    
+    // Đóng connection hiện tại
+    await sql.close();
+    
+    // Kết nối với config mới
+    await sql.connect(newConfig);
+    console.log('✅ Connected to:', newConfig.server, '/', newConfig.database);
+    
+    return { server: newConfig.server, database: newConfig.database };
+  } catch (err) {
+    console.error('❌ Error switching database:', err);
     throw err;
   }
 }
@@ -72,6 +117,7 @@ export default {
   connectSQLDB, 
   connectMongoDB, 
   connectAllDB,
+  switchDatabaseByRegion,  // Export function chuyển database
   dbConfig,  // Export SQL config
   sql,
   mongoose 

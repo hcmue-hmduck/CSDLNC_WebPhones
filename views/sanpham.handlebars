@@ -3419,9 +3419,22 @@
                             console.log('Images:', finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
                             
                             // 🎯 Lấy URL của ảnh chính từ productImages[mainImageIndex]
+                            // ⚠️ QUAN TRỌNG: Lấy SAU KHI upload để có URL mới
                             const mainImageIndex = window.simpleImageUploadManager?.mainImageIndex || 0;
                             const selectedMainImage = window.simpleImageUploadManager?.productImages[mainImageIndex];
-                            const mainImageUrl = selectedMainImage?.url || null;
+                            
+                            // selectedMainImage có thể là { url, isExisting } hoặc File object
+                            let mainImageUrl = null;
+                            if (selectedMainImage) {
+                                if (selectedMainImage.url) {
+                                    mainImageUrl = selectedMainImage.url; // Đã có URL sau upload
+                                } else if (selectedMainImage instanceof File) {
+                                    // Nếu vẫn là File sau upload → tìm trong validHinhAnh theo index
+                                    console.warn('⚠️ Main image still File object after upload, finding in validHinhAnh');
+                                    mainImageUrl = validHinhAnh[mainImageIndex] || null;
+                                }
+                            }
+                            
                             console.log(`🎯 Main image index: ${mainImageIndex}, URL:`, mainImageUrl?.substring(0, 60));
                             
                             let anhDaiDien = null;
@@ -3431,7 +3444,11 @@
                                 const mainIdx = finalImages.findIndex(img => img === mainImageUrl);
                                 console.log(`🔍 Found main image at index: ${mainIdx}`);
                                 
-                                if (mainIdx > 0) {
+                                if (mainIdx === -1) {
+                                    // Nếu không tìm thấy trong finalImages → add vào đầu
+                                    console.warn('⚠️ Main image not found in finalImages, adding to front');
+                                    finalImages.unshift(mainImageUrl);
+                                } else if (mainIdx > 0) {
                                     // Swap ảnh chính lên index 0
                                     const temp = finalImages[0];
                                     finalImages[0] = finalImages[mainIdx];

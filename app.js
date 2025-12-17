@@ -894,6 +894,13 @@ app.post('/admin-login', async (req, res) => {
 
         const user = result.recordset[0];
 
+        console.log('👤 User info:', {
+            email: user.email,
+            vai_tro: user.vai_tro,
+            vung_id: user.vung_id,
+            trang_thai: user.trang_thai
+        });
+
         // Kiểm tra tài khoản có active không
         if (!user.trang_thai) {
             return res.status(403).json({
@@ -927,13 +934,30 @@ app.post('/admin-login', async (req, res) => {
             });
         }
 
+        // Chuyển database connection theo vùng của admin
+        let dbInfo = null;
+        console.log('🔄 Checking vung_id for database switch:', user.vung_id);
+        if (user.vung_id) {
+            try {
+                console.log('🔄 Calling switchDatabaseByRegion with vung_id:', user.vung_id);
+                dbInfo = await db.switchDatabaseByRegion(user.vung_id);
+                console.log('✅ Admin database switched:', dbInfo);
+            } catch (err) {
+                console.error('⚠️ Failed to switch database, using current connection:', err);
+            }
+        } else {
+            console.log('⚠️ No vung_id found, keeping default database');
+        }
+
         // Tạo session
         req.session.user = {
             id: user.id,
             email: user.email,
             ho_ten: user.ho_ten,
             vai_tro: user.vai_tro,
-            vung_id: user.vung_id
+            vung_id: user.vung_id,
+            dbServer: dbInfo?.server,
+            dbDatabase: dbInfo?.database
         };
 
         // Save session và redirect
@@ -969,6 +993,9 @@ app.post('/admin-login', async (req, res) => {
 
 // Logout
 app.post('/logout', (req, res) => {
+    // Kiểm tra user role để redirect đúng trang
+    const isAdmin = req.session.user && (req.session.user.vai_tro === 'admin' || req.session.user.vai_tro === 'super_admin');
+    
     req.session.destroy((err) => {
         if (err) {
             console.error('Logout error:', err);
@@ -979,18 +1006,22 @@ app.post('/logout', (req, res) => {
         }
         res.json({
             success: true,
-            message: 'Đăng xuất thành công'
+            message: 'Đăng xuất thành công',
+            redirect: isAdmin ? '/admin-login' : '/login'
         });
     });
 });
 
 // GET Logout (alternative)
 app.get('/logout', (req, res) => {
+    // Kiểm tra user role để redirect đúng trang
+    const isAdmin = req.session.user && (req.session.user.vai_tro === 'admin' || req.session.user.vai_tro === 'super_admin');
+    
     req.session.destroy((err) => {
         if (err) {
             console.error('Logout error:', err);
         }
-        res.redirect('/login');
+        res.redirect(isAdmin ? '/admin-login' : '/login');
     });
 });
 
@@ -5428,9 +5459,33 @@ app.put('/api/mongo/sanpham/:id', async (req, res) => {
         
         // ⚠️ Không merge hinh_anh - frontend gửi full array với thứ tự đúng
         // (Ảnh chính đã được swap lên index 0)
+        // 🔒 BẢO VỆ: Chỉ xóa khi cả frontend gửi null VÀ DB cũng empty
         if (hinh_anh !== undefined) {
-            updateData.hinh_anh = hinh_anh;
-            console.log(`📸 Updated hinh_anh array: ${hinh_anh.length} images (order preserved)`);
+            // Nếu frontend gửi array hợp lệ → Update bình thường
+            if (Array.isArray(hinh_anh) && hinh_anh.length > 0) {
+                updateData.hinh_anh = hinh_anh;
+                console.log(`📸 Updated hinh_anh array: ${hinh_anh.length} images (order preserved)`);
+            } 
+            // Nếu frontend gửi null/empty → Kiểm tra DB trước khi cho phép xóa
+            else if (!hinh_anh || (Array.isArray(hinh_anh) && hinh_anh.length === 0)) {
+                try {
+                    const existingDoc = await DataModel.Mongo.ProductDetail.findById(mongoId).lean();
+                    const existingImages = existingDoc?.hinh_anh || [];
+                    
+                    // Nếu DB có ảnh → KHÔNG cho phép xóa (giữ nguyên)
+                    if (existingImages.length > 0) {
+                        console.log(`🔒 PROTECTED: Frontend sent null/empty but DB has ${existingImages.length} images. Keeping existing data.`);
+                        // Không add vào updateData → giữ nguyên DB
+                    } 
+                    // Nếu DB cũng empty → OK to set null/empty
+                    else {
+                        updateData.hinh_anh = hinh_anh || [];
+                        console.log(`✅ Both frontend and DB empty, setting hinh_anh to empty`);
+                    }
+                } catch (err) {
+                    console.warn('⚠️ Could not check existing images, skipping update:', err.message);
+                }
+            }
         }
         
         // Lưu ảnh đại diện (ảnh chính)
@@ -5512,8 +5567,33 @@ app.put('/api/mongo/sanpham/:id', async (req, res) => {
                     updateData.variants = variants;
                 }
                 
-                // Tính calculated_price từ tất cả regions trong merged variants
+                // ✨ AUTO UPDATE link_anh: Sync variant images with hinh_anh array
                 const finalVariants = updateData.variants;
+                const updatedHinhAnh = updateData.hinh_anh || hinh_anh;
+                
+                if (updatedHinhAnh && Array.isArray(updatedHinhAnh)) {
+                    console.log('🔄 Auto-updating variant link_anh from hinh_anh array...');
+                    
+                    Object.keys(finalVariants).forEach(region => {
+                        const regionData = finalVariants[region];
+                        if (regionData?.variant_combinations && Array.isArray(regionData.variant_combinations)) {
+                            regionData.variant_combinations.forEach(combo => {
+                                // Nếu combo có link_anh và URL đó tồn tại trong hinh_anh array → OK
+                                if (combo.link_anh && updatedHinhAnh.includes(combo.link_anh)) {
+                                    // Keep existing link_anh
+                                } 
+                                // Nếu combo có link_anh nhưng URL không còn trong hinh_anh → set null
+                                else if (combo.link_anh && !updatedHinhAnh.includes(combo.link_anh)) {
+                                    console.log(`⚠️ Variant ${combo.sku}: Image removed from hinh_anh, clearing link_anh`);
+                                    combo.link_anh = null;
+                                }
+                                // Nếu combo chưa có link_anh → không tự động assign (frontend phải chọn)
+                            });
+                        }
+                    });
+                }
+                
+                // Tính calculated_price từ tất cả regions trong merged variants
                 Object.keys(finalVariants).forEach(region => {
                     const regionData = finalVariants[region];
                     if (regionData?.variant_combinations && Array.isArray(regionData.variant_combinations)) {
