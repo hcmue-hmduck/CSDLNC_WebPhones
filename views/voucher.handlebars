@@ -2504,13 +2504,42 @@ function toggleScopeOptions() {
 async function loadProductsForSelection() {
     try {
         // Lấy vùng của voucher
-        const voucherRegion = document.getElementById('voucherRegion').value;
+        const voucherRegion = document.getElementById('voucherRegion')?.value;
         
-        const response = await fetch('/api/sanpham');
-        if (!response.ok) throw new Error('Failed to load products');
+        if (!voucherRegion) {
+            console.warn('⚠️ Voucher region not selected');
+            Swal.fire('Cảnh báo', 'Vui lòng chọn vùng cho voucher trước', 'warning');
+            return;
+        }
+        
+        console.log('🔄 Loading products for region:', voucherRegion);
+        
+        // Gọi API với filter theo vùng để backend chỉ trả về variants cho vùng này
+        const response = await fetch(`/api/sanpham?vung_id=${voucherRegion}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ API Error:', response.status, errorText);
+            throw new Error(`API returned ${response.status}: ${errorText}`);
+        }
         
         const data = await response.json();
-        const products = data.data?.sanphams || data.sanphams || data;
+        console.log('📥 API Response:', data);
+        
+        // Parse products array
+        let products = [];
+        if (data.success && data.data?.sanphams) {
+            products = data.data.sanphams;
+        } else if (data.sanphams) {
+            products = data.sanphams;
+        } else if (Array.isArray(data)) {
+            products = data;
+        } else {
+            throw new Error('Invalid API response format');
+        }
+        
+        if (!Array.isArray(products)) {
+            throw new Error('Products is not an array');
+        }
         
         // Filter products: chỉ lấy products có variants cho vùng này
         const filteredProducts = products.filter(product => {
@@ -2568,8 +2597,8 @@ async function loadProductVariants(product) {
         currentProductVariants = filteredVariants.map((v, index) => {
             return {
                 index: index,
-                variantId: v.id,  // SQL product_variants.id
-                productId: product.id,  // SQL products.id - dùng cho san_pham_id
+                variantId: v.id,  // SQL product_variants.id → voucher_products.san_pham_id (FK)
+                productId: product.id,  // SQL products.id (chỉ để display, không dùng cho FK)
                 productName: product.ten_san_pham,
                 variantName: v.ten_hien_thi || v.ma_sku || `Variant ${index + 1}`,
                 sku: v.ma_sku,
@@ -2668,8 +2697,8 @@ function addVariantsToList() {
 
         if (!selectedProducts.has(variant.variantId)) {
             const variantData = {
-                variantId: variant.variantId,  // SQL product_variants.id
-                productId: variant.productId,  // SQL products.id - quan trọng cho FK
+                variantId: variant.variantId,  // SQL product_variants.id → voucher_products.san_pham_id (FK)
+                productId: variant.productId,  // SQL products.id (chỉ để display, không dùng cho FK)
                 productName: variant.productName,
                 variantName: variant.variantName,
                 attributes: variant.attributes,
@@ -2768,8 +2797,7 @@ async function saveVoucher() {
         const scope = document.getElementById('voucherScope').value;
         
         const productsArray = Array.from(selectedProducts.values()).map(item => ({
-            productId: item.productId,      // SQL products.id - dùng cho san_pham_id (FK)
-            variantId: item.variantId,      // SQL product_variants.id - dùng cho bien_the_id
+            variantId: item.variantId,      // SQL product_variants.id - dùng cho voucher_products.san_pham_id (FK)
             productName: item.productName,
             variantName: item.variantName
         }));
@@ -2854,30 +2882,73 @@ async function editVoucher(id) {
         // Load selected products if scope is theo_san_pham
         selectedProducts.clear();
         if (voucher.pham_vi === 'theo_san_pham') {
-            console.log('📝 Loading existing products for edit mode...');
-            const productsResponse = await fetch(`/api/vouchers/${id}/products`);
-            if (productsResponse.ok) {
+            console.log('📝 Loading existing products for voucher:', id);
+            
+            try {
+                const productsResponse = await fetch(`/api/vouchers/${id}/products`);
+                
+                if (!productsResponse.ok) {
+                    throw new Error(`API Error: ${productsResponse.status}`);
+                }
+                
                 const productsData = await productsResponse.json();
-                console.log('📦 Products from API:', productsData.products);
-                productsData.products.forEach(item => {
-                    const variantInfo = item.variant_info || {};
-                    const variantData = {
-                        variantId: item.san_pham_id,
-                        productId: item.product_id || item.san_pham_id,
-                        productName: item.ten_san_pham,
-                        variantName: variantInfo.name || 'Mặc định',
-                        attributes: variantInfo.attributes || {},
-                        fullName: `${item.ten_san_pham} - ${variantInfo.name || 'Mặc định'}`,
-                        price: variantInfo.gia_ban || item.gia_ban || 0,
-                        stock: variantInfo.so_luong || 0,
-                        link_avatar: item.link_avatar || '/image/default-product.png'
-                    };
-                    console.log('✏️ Reconstructing variant for edit:', variantData);
-                    selectedProducts.set(item.san_pham_id, variantData);
+                console.log('📦 Products API Response:', productsData);
+                console.log('📦 Number of products:', productsData.products?.length || 0);
+                
+                if (productsData.success && productsData.products && productsData.products.length > 0) {
+                    // Map products từ API vào selectedProducts (CHỈ products của voucher này)
+                    productsData.products.forEach((item, index) => {
+                        // item.san_pham_id là product_variants.id (FK trong voucher_products)
+                        const variantId = item.san_pham_id;
+                        const variantInfo = item.variant_info || {};
+                        
+                        // Get product name and variant name
+                        const productName = item.ten_san_pham || 'N/A';
+                        const variantName = item.ten_hien_thi || item.ma_sku || 
+                            (variantInfo.attributes ? Object.values(variantInfo.attributes).join(' - ') : 'Mặc định');
+                        
+                        // Tạo variantData structure giống như khi thêm mới
+                        const variantData = {
+                            variantId: variantId,                    // product_variants.id
+                            productId: item.product_id || variantId,  // products.id hoặc fallback
+                            productName: productName,
+                            variantName: variantName,
+                            attributes: variantInfo.attributes || {},
+                            fullName: `${productName} - ${variantName}`,
+                            price: variantInfo.gia_ban || item.gia_ban || 0,
+                            stock: variantInfo.so_luong || 0,
+                            link_avatar: item.link_anh || '/image/default-product.png'
+                        };
+                        
+                        console.log(`✏️ [${index + 1}/${productsData.products.length}] Adding variant:`, {
+                            variantId: variantId,
+                            productName: productName,
+                            variantName: variantName
+                        });
+                        
+                        selectedProducts.set(variantId, variantData);
+                    });
+                    
+                    console.log('✅ Total selected products for this voucher:', selectedProducts.size);
+                    console.log('📋 Selected variants IDs:', Array.from(selectedProducts.keys()));
+                    updateSelectedProductsTable();
+                } else {
+                    console.log('⚠️ No products found for voucher ID:', id);
+                    updateSelectedProductsTable(); // Show empty table
+                }
+            } catch (error) {
+                console.error('❌ Failed to load voucher products:', error);
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Không thể tải sản phẩm',
+                    text: 'Không thể tải danh sách sản phẩm của voucher này',
+                    timer: 2000
                 });
-                console.log('✅ Reconstructed selectedProducts:', Array.from(selectedProducts.values()));
-                updateSelectedProductsTable();
+                updateSelectedProductsTable(); // Show empty table
             }
+        } else {
+            console.log('ℹ️ Voucher scope is not "theo_san_pham", clearing products');
+            updateSelectedProductsTable(); // Clear table if not theo_san_pham
         }
         
         document.getElementById('voucherModalTitle').innerHTML = '<i class="fas fa-edit"></i><span>Chỉnh Sửa Voucher</span>';

@@ -9798,59 +9798,104 @@ app.get('/api/vouchers/:id/products', async (req, res) => {
             .input('voucher_id', sql.UniqueIdentifier, req.params.id)
             .query(`
                 SELECT 
-                    vp.*,
+                    vp.voucher_id,
+                    vp.san_pham_id,
+                    pv.ten_hien_thi,
+                    pv.gia_ban,
+                    pv.anh_dai_dien,
+                    pv.so_luong_ton_kho,
+                    pv.ma_sku,
+                    pv.san_pham_id as product_id,
                     p.ten_san_pham,
-                    p.gia_ban,
-                    p.link_anh
+                    p.mongo_detail_id
                 FROM voucher_products vp
-                INNER JOIN products p ON vp.san_pham_id = p.id
+                INNER JOIN product_variants pv ON vp.san_pham_id = pv.id
+                LEFT JOIN products p ON pv.san_pham_id = p.id
                 WHERE vp.voucher_id = @voucher_id
             `);
         
-        // Get MongoDB details for each product to get variant info
+        console.log('📦 Voucher products query result:', result.recordset.length, 'rows');
+        
+        // Get MongoDB details for each variant to get full variant info
         const productsWithVariants = [];
         
         for (const item of result.recordset) {
             try {
-                const mongoRequest = new sql.Request();
-                const productResult = await mongoRequest
-                    .input('product_id', sql.UniqueIdentifier, item.san_pham_id)
-                    .query('SELECT mongo_detail_id FROM products WHERE id = @product_id');
+                let variantInfo = null;
                 
-                if (productResult.recordset.length > 0 && productResult.recordset[0].mongo_detail_id) {
-                    const mongoDetail = await DataModel.Mongo.ProductDetail.findById(productResult.recordset[0].mongo_detail_id);
+                // Try to get MongoDB details if mongo_detail_id exists
+                if (item.mongo_detail_id) {
+                    const mongoDetail = await DataModel.Mongo.ProductDetail.findById(item.mongo_detail_id);
                     
-                    if (mongoDetail && mongoDetail.variants) {
-                        // Find the specific variant
-                        const variant = mongoDetail.variants.variant_combinations?.find(v => v.variant_id === item.san_pham_id);
+                    if (mongoDetail && mongoDetail.variants && mongoDetail.variants.variant_combinations) {
+                        // Find the specific variant by variant_id (product_variants.id)
+                        const variant = mongoDetail.variants.variant_combinations.find(
+                            v => v.variant_id === item.san_pham_id
+                        );
                         
-                        productsWithVariants.push({
-                            ...item,
-                            variant_info: variant ? {
+                        if (variant) {
+                            variantInfo = {
                                 variant_id: variant.variant_id,
-                                attributes: variant.attributes,
-                                gia_ban: variant.gia_ban,
-                                so_luong: variant.so_luong
-                            } : null
-                        });
-                    } else {
-                        productsWithVariants.push(item);
+                                attributes: variant.attributes || {},
+                                gia_ban: variant.gia_ban || item.gia_ban,
+                                so_luong: variant.so_luong || item.so_luong_ton_kho || 0
+                            };
+                        }
                     }
-                } else {
-                    productsWithVariants.push(item);
                 }
+                
+                // If no MongoDB variant info, use SQL data
+                if (!variantInfo) {
+                    variantInfo = {
+                        variant_id: item.san_pham_id,
+                        attributes: {},
+                        gia_ban: item.gia_ban || 0,
+                        so_luong: item.so_luong_ton_kho || 0
+                    };
+                }
+                
+                productsWithVariants.push({
+                    voucher_id: item.voucher_id,
+                    san_pham_id: item.san_pham_id,  // product_variants.id
+                    product_id: item.product_id,     // products.id
+                    ten_san_pham: item.ten_san_pham || item.ten_hien_thi,  // Lấy từ products hoặc variants
+                    ten_hien_thi: item.ten_hien_thi,
+                    ma_sku: item.ma_sku,
+                    gia_ban: item.gia_ban,
+                    link_anh: item.anh_dai_dien,
+                    variant_info: variantInfo
+                });
+                
             } catch (err) {
-                console.error('Error getting variant info:', err);
-                productsWithVariants.push(item);
+                console.error('Error getting variant info for item:', item.san_pham_id, err);
+                // Fallback to basic info
+                productsWithVariants.push({
+                    voucher_id: item.voucher_id,
+                    san_pham_id: item.san_pham_id,
+                    product_id: item.product_id,
+                    ten_san_pham: item.ten_san_pham || item.ten_hien_thi,
+                    ten_hien_thi: item.ten_hien_thi,
+                    ma_sku: item.ma_sku,
+                    gia_ban: item.gia_ban,
+                    link_anh: item.anh_dai_dien,
+                    variant_info: {
+                        variant_id: item.san_pham_id,
+                        attributes: {},
+                        gia_ban: item.gia_ban || 0,
+                        so_luong: item.so_luong_ton_kho || 0
+                    }
+                });
             }
         }
+        
+        console.log('✅ Returning', productsWithVariants.length, 'products with variant info');
         
         res.json({
             success: true,
             products: productsWithVariants
         });
     } catch (error) {
-        console.error('Voucher Products API Error:', error);
+        console.error('❌ Voucher Products API Error:', error);
         res.status(500).json({
             success: false,
             message: 'Lỗi khi lấy sản phẩm voucher: ' + error.message
@@ -9879,10 +9924,17 @@ app.post('/api/vouchers', async (req, res) => {
             loai_voucher: req.body.loai_voucher || null,
             vung_id: req.body.vung_id || 'bac', // Mặc định Bắc nếu không có
             trang_thai: req.body.trang_thai ? 1 : 0,
-            nguoi_tao: req.session?.user?.id || null
+            nguoi_tao: req.body.nguoi_tao || req.session?.user?.id
         };
         
-        // Validate
+        // Validate required fields
+        if (!voucherData.nguoi_tao) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu thông tin người tạo voucher (nguoi_tao)'
+            });
+        }
+        
         if (voucherData.loai_giam_gia === 'phantram' && voucherData.gia_tri_giam > 100) {
             return res.status(400).json({
                 success: false,
@@ -9988,12 +10040,11 @@ app.post('/api/vouchers', async (req, res) => {
                 await insertRequest
                     .input('voucher_id', sql.UniqueIdentifier, newVoucher.id)
                     .input('san_pham_id', sql.UniqueIdentifier, product.variantId)
-                    .input('vung_id', sql.NVarChar(10), voucherData.vung_id)
                     .query(`
                         INSERT INTO voucher_products 
-                        (voucher_id, san_pham_id, vung_id)
+                        (voucher_id, san_pham_id)
                         VALUES 
-                        (@voucher_id, @san_pham_id, @vung_id)
+                        (@voucher_id, @san_pham_id)
                     `);
             }
             
@@ -10067,7 +10118,6 @@ app.put('/api/vouchers/:id', async (req, res) => {
             .input('ngay_ket_thuc', sql.DateTime2, voucherData.ngay_ket_thuc)
             .input('pham_vi', sql.NVarChar(20), voucherData.pham_vi)
             .input('loai_voucher', sql.NVarChar(50), voucherData.loai_voucher)
-            .input('vung_id', sql.NVarChar(10), voucherData.vung_id)
             .input('trang_thai', sql.Bit, voucherData.trang_thai)
             .query(`
                 UPDATE vouchers 
@@ -10083,7 +10133,6 @@ app.put('/api/vouchers/:id', async (req, res) => {
                     ngay_ket_thuc = @ngay_ket_thuc,
                     pham_vi = @pham_vi,
                     loai_voucher = @loai_voucher,
-                    vung_id = @vung_id,
                     trang_thai = @trang_thai,
                     ngay_cap_nhat = GETDATE()
                 WHERE id = @id
@@ -10102,6 +10151,9 @@ app.put('/api/vouchers/:id', async (req, res) => {
         // Update voucher products if pham_vi = 'theo_san_pham' and products provided
         if (voucherData.pham_vi === 'theo_san_pham' && req.body.products && Array.isArray(req.body.products)) {
             console.log('📦 Updating voucher products...', req.body.products.length, 'variants');
+            
+            // Lấy vung_id từ voucher hiện tại trong DB (không cho phép update vung_id)
+            const voucherVungId = updatedVoucher.vung_id;
             
             // Delete existing products
             const deleteRequest = new sql.Request();
@@ -10131,23 +10183,22 @@ app.put('/api/vouchers/:id', async (req, res) => {
                 
                 const variant = variantCheck.recordset[0];
                 console.log('✅ Variant verified:', variant);
-                console.log('🔍 Voucher vung_id:', voucherData.vung_id, '| Variant site_origin:', variant.site_origin);
+                console.log('🔍 Voucher vung_id:', voucherVungId, '| Variant site_origin:', variant.site_origin);
                 
                 // Check if variant's site_origin matches voucher's vung_id (for merge replication)
-                if (variant.site_origin !== voucherData.vung_id) {
-                    throw new Error(`Variant "${product.variantName}" thuộc vùng "${variant.site_origin}" không khớp với voucher vùng "${voucherData.vung_id}". Merge replication không cho phép.`);
+                if (variant.site_origin !== voucherVungId) {
+                    throw new Error(`Variant "${product.variantName}" thuộc vùng "${variant.site_origin}" không khớp với voucher vùng "${voucherVungId}". Merge replication không cho phép.`);
                 }
                 
                 const insertRequest = new sql.Request();
                 await insertRequest
                     .input('voucher_id', sql.UniqueIdentifier, req.params.id)
                     .input('san_pham_id', sql.UniqueIdentifier, product.variantId)
-                    .input('vung_id', sql.NVarChar(10), voucherData.vung_id)
                     .query(`
                         INSERT INTO voucher_products 
-                        (voucher_id, san_pham_id, vung_id)
+                        (voucher_id, san_pham_id)
                         VALUES 
-                        (@voucher_id, @san_pham_id, @vung_id)
+                        (@voucher_id, @san_pham_id)
                     `);
             }
             
