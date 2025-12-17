@@ -1357,8 +1357,29 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
     }
     
-    // Tính phí ship
-    const shipping = (subtotal >= 500000 || isFreeShip) ? 0 : 30000;
+    // Đếm số vùng khác nhau trong giỏ hàng
+    const regions = new Set();
+    document.querySelectorAll('.cart-item').forEach(item => {
+      const siteOrigin = item.getAttribute('data-site-origin');
+      if (siteOrigin) {
+        regions.add(siteOrigin);
+      }
+    });
+    const regionCount = regions.size;
+    
+    console.log('🌍 Số vùng trong giỏ hàng:', regionCount, 'Danh sách:', Array.from(regions));
+    
+    // Tính phí ship: 30k/vùng, miễn phí nếu đơn >= 500k hoặc có voucher free ship
+    let baseShippingFee = 30000;
+    let shipping = 0;
+    
+    if (subtotal >= 500000 || isFreeShip) {
+      shipping = 0;
+    } else {
+      // Phí ship = 30k × số vùng
+      shipping = baseShippingFee * Math.max(regionCount, 1);
+    }
+    
     const total = subtotal - discount + shipping;
 
     document.getElementById('summarySubtotal').textContent = Utils.formatCurrency(subtotal);
@@ -1367,8 +1388,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     const shippingEl = document.getElementById('summaryShipping');
     if (isFreeShip && shipping === 0) {
       shippingEl.innerHTML = '<span style="color: #28a745; font-weight: 700;">Miễn phí (Voucher)</span>';
+    } else if (subtotal >= 500000 && shipping === 0) {
+      shippingEl.innerHTML = '<span style="color: #28a745; font-weight: 700;">Miễn phí (Đơn ≥ 500k)</span>';
+    } else if (regionCount > 1) {
+      shippingEl.innerHTML = `${Utils.formatCurrency(shipping)} <small style="color: #666;">(${regionCount} vùng)</small>`;
     } else {
-      shippingEl.textContent = shipping === 0 ? 'Miễn phí' : Utils.formatCurrency(shipping);
+      shippingEl.textContent = Utils.formatCurrency(shipping);
     }
     
     document.getElementById('totalAmount').textContent = Utils.formatCurrency(total);

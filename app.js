@@ -10549,24 +10549,73 @@ app.post('/api/orders', async (req, res) => {
         }
 
         // Check if items need to be fulfilled from multiple warehouses
+        // Query inventory to get warehouse allocation for each item
         const itemsWithWarehouse = [];
         for (const item of items) {
             // Check if this variant has flash sale
             const flashSaleInfo = flashSaleMap.get(item.variant_id);
             
-            // For now, allocate all items to primary warehouse
-            // TODO: Implement inventory check and smart allocation
+            // Get variant info with site_origin
+            const variantRequest = new sql.Request();
+            const variantResult = await variantRequest
+                .input('variant_id', sql.UniqueIdentifier, item.variant_id)
+                .query(`
+                    SELECT pv.id, pv.site_origin, pv.san_pham_id
+                    FROM product_variants pv
+                    WHERE pv.id = @variant_id
+                `);
+            
+            if (variantResult.recordset.length === 0) {
+                throw new Error(`Không tìm thấy thông tin variant ${item.variant_id}`);
+            }
+            
+            const variant = variantResult.recordset[0];
+            const site_origin = variant.site_origin || vung_khach_hang; // Fallback to customer region
+            
+            // Query inventory to find warehouse with available stock
+            const inventoryRequest = new sql.Request();
+            const inventoryResult = await inventoryRequest
+                .input('variant_id', sql.UniqueIdentifier, item.variant_id)
+                .input('quantity', sql.Int, parseInt(item.so_luong))
+                .input('site_origin', sql.NVarChar(10), site_origin)
+                .input('vung_khach_hang', sql.NVarChar(10), vung_khach_hang)
+                .query(`
+                    SELECT TOP 1 
+                        i.kho_id as warehouse_id,
+                        w.vung_id as warehouse_region,
+                        w.ten_kho,
+                        i.so_luong_kha_dung
+                    FROM inventory i
+                    INNER JOIN warehouses w ON i.kho_id = w.id
+                    WHERE i.variant_id = @variant_id
+                        AND i.so_luong_kha_dung >= @quantity
+                        AND w.trang_thai = 1
+                    ORDER BY 
+                        CASE WHEN w.vung_id = @site_origin THEN 1 ELSE 2 END,
+                        CASE WHEN w.vung_id = @vung_khach_hang THEN 1 ELSE 2 END,
+                        w.priority_levels DESC,
+                        w.is_primary DESC,
+                        i.so_luong_kha_dung DESC
+                `);
+            
+            if (inventoryResult.recordset.length === 0) {
+                throw new Error(`Không đủ hàng trong kho cho sản phẩm ${item.variant_id}`);
+            }
+            
+            const inventory = inventoryResult.recordset[0];
+            
             itemsWithWarehouse.push({
                 ...item,
-                warehouse_id: primaryWarehouse.id,
-                warehouse_region: primaryWarehouse.vung_id,
+                warehouse_id: inventory.warehouse_id,
+                warehouse_region: inventory.warehouse_region,
+                site_origin: site_origin,
                 flash_sale_item_id: flashSaleInfo ? flashSaleInfo.flash_sale_item_id : null,
                 gia_flash_sale: flashSaleInfo ? flashSaleInfo.gia_flash_sale : null,
                 gioi_han_mua: flashSaleInfo ? flashSaleInfo.gioi_han_mua : null
             });
         }
         
-        console.log('Items with warehouse and flash sale:', itemsWithWarehouse);
+        console.log('Items with warehouse allocation from inventory:', itemsWithWarehouse);
 
         // Calculate chi_phi_noi_bo if cross-region fulfillment
         let chi_phi_noi_bo = 0;
@@ -10697,7 +10746,7 @@ app.post('/api/orders', async (req, res) => {
                 
                 console.log('✅ Variant update result - rows affected:', variantUpdateResult.rowsAffected[0]);
 
-                // 5. Update SQL inventory table
+                // 5. Update SQL inventory table - trừ tồn kho từ kho được phân bổ
                 console.log('📦 Updating inventory - variant:', item.variant_id, 'warehouse:', item.warehouse_id, 'quantity:', item.so_luong);
                 
                 const updateInventoryRequest = new sql.Request(transaction);
@@ -10712,9 +10761,14 @@ app.post('/api/orders', async (req, res) => {
                             so_luong_da_dat = so_luong_da_dat + @quantity,
                             ngay_cap_nhat = GETDATE()
                         WHERE variant_id = @variant_id
+                            AND kho_id = @warehouse_id
                     `);
                 
                 console.log('✅ Inventory update result - rows affected:', inventoryUpdateResult.rowsAffected[0]);
+                
+                if (inventoryUpdateResult.rowsAffected[0] === 0) {
+                    throw new Error(`Không thể cập nhật tồn kho cho variant ${item.variant_id} tại kho ${item.warehouse_id}`);
+                }
 
                 // 6. Update cart - Trừ số lượng đã đặt (chỉ trừ nếu đủ)
                 if (item.cart_item_id) {
