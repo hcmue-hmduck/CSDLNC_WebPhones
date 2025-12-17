@@ -111,7 +111,7 @@ function requireAuth(req, res, next) {
 // Admin authentication middleware (chỉ admin và super_admin)
 function requireAdmin(req, res, next) {
     if (!req.session || !req.session.user) {
-        return res.redirect('/login?redirect=' + encodeURIComponent(req.originalUrl));
+        return res.redirect('/admin-login?redirect=' + encodeURIComponent(req.originalUrl));
     }
     
     const userRole = req.session.user.vai_tro;
@@ -850,8 +850,8 @@ app.get('/', async (req, res) => {
 // AUTHENTICATION ROUTES
 // ==========================================
 
-// GET Login page
-app.get('/login', (req, res) => {
+// GET Admin Login page
+app.get('/admin-login', (req, res) => {
     // Nếu đã đăng nhập, redirect về admin
     if (req.session && req.session.user) {
         const redirect = req.query.redirect || '/admin';
@@ -863,8 +863,8 @@ app.get('/login', (req, res) => {
     });
 });
 
-// POST Login - Xác thực tài khoản
-app.post('/login', async (req, res) => {
+// POST Admin Login - Xác thực tài khoản admin
+app.post('/admin-login', async (req, res) => {
     try {
         const { email, password } = req.body;
         
@@ -5297,7 +5297,7 @@ app.put('/api/mongo/sanpham/:id', async (req, res) => {
         console.log('🔍 RAW req.body:', JSON.stringify(req.body, null, 2));
         console.log('🔍 req.body keys:', Object.keys(req.body));
         
-        const { sql_product_id, thong_so_ky_thuat, hinh_anh, videos, video_links, variants, thong_tin_khac, link_avatar, mo_ta_chi_tiet, trang_thai, san_pham_noi_bat, slug, chi_tiet } = req.body;
+        const { sql_product_id, thong_so_ky_thuat, hinh_anh, anh_dai_dien, videos, video_links, variants, thong_tin_khac, link_avatar, mo_ta_chi_tiet, trang_thai, san_pham_noi_bat, slug, chi_tiet } = req.body;
 
         // 🔍 LOG CÁC GIÁ TRỊ SAU KHI DESTRUCTURE
         console.log('🔍 After destructuring:', {
@@ -5426,26 +5426,17 @@ app.put('/api/mongo/sanpham/:id', async (req, res) => {
         if (sql_product_id !== undefined) updateData.sql_product_id = sql_product_id;
         if (thong_so_ky_thuat !== undefined) updateData.thong_so_ky_thuat = thongSoKyThuatArray;
         
-        // MERGE hinh_anh: Lấy array cũ từ DB, merge với array mới (loại duplicate)
+        // ⚠️ Không merge hinh_anh - frontend gửi full array với thứ tự đúng
+        // (Ảnh chính đã được swap lên index 0)
         if (hinh_anh !== undefined) {
-            try {
-                const existingDoc = await DataModel.Mongo.ProductDetail.findById(mongoId).lean();
-                const existingImages = existingDoc?.hinh_anh || [];
-                
-                // Merge: giữ ảnh cũ + thêm ảnh mới (loại duplicate)
-                const mergedImages = [...existingImages];
-                hinh_anh.forEach(img => {
-                    if (img && !mergedImages.includes(img)) {
-                        mergedImages.push(img);
-                    }
-                });
-                
-                updateData.hinh_anh = mergedImages;
-                console.log(`📸 Merged hinh_anh: ${existingImages.length} existing + ${hinh_anh.length} new = ${mergedImages.length} total`);
-            } catch (err) {
-                console.warn('⚠️ Could not merge hinh_anh, using new array:', err.message);
-                updateData.hinh_anh = hinh_anh;
-            }
+            updateData.hinh_anh = hinh_anh;
+            console.log(`📸 Updated hinh_anh array: ${hinh_anh.length} images (order preserved)`);
+        }
+        
+        // Lưu ảnh đại diện (ảnh chính)
+        if (anh_dai_dien !== undefined) {
+            updateData.anh_dai_dien = anh_dai_dien;
+            console.log(`📸 Updated anh_dai_dien: ${anh_dai_dien ? anh_dai_dien.substring(0, 60) + '...' : 'null'}`);
         }
         
         // Xử lý variants và tính calculated_price
@@ -5462,13 +5453,70 @@ app.put('/api/mongo/sanpham/:id', async (req, res) => {
             
             if (isGroupedByRegion) {
                 console.log('📦 UPDATE: Variants grouped by region structure detected');
-                // Lưu trực tiếp structure grouped by region
-                updateData.variants = variants;
                 
-                // Tính calculated_price từ tất cả regions
-                Object.keys(variants).forEach(region => {
-                    const regionData = variants[region];
-                    if (regionData.variant_combinations && Array.isArray(regionData.variant_combinations)) {
+                // ✅ MERGE: Lấy variants cũ từ DB, chỉ cập nhật các vùng được gửi lên
+                try {
+                    const existingDoc = await DataModel.Mongo.ProductDetail.findById(mongoId).lean();
+                    const existingVariants = existingDoc?.variants || {};
+                    
+                    // Merge: Giữ lại variants của các vùng không được cập nhật
+                    const mergedVariants = { ...existingVariants };
+                    
+                    // ✅ MERGE COMBINATIONS: Merge từng vùng ở level combinations để giữ combos cũ
+                    Object.keys(variants).forEach(region => {
+                        const existingRegionVariants = existingVariants[region] || {};
+                        const newRegionVariants = variants[region];
+                        
+                        // Merge combinations: Giữ combos cũ + thêm combos mới
+                        const existingCombos = existingRegionVariants.variant_combinations || [];
+                        const newCombos = newRegionVariants.variant_combinations || [];
+                        
+                        // Chỉ giữ combos đã save (có variant_id)
+                        const savedExistingCombos = existingCombos.filter(combo => combo.variant_id);
+                        
+                        // Index combos cũ đã save theo sku
+                        const existingCombosBySku = {};
+                        savedExistingCombos.forEach(combo => {
+                            if (combo.sku) {
+                                existingCombosBySku[combo.sku] = combo;
+                            }
+                        });
+                        
+                        // Merge: Update nếu trùng sku, giữ cũ nếu không có trong mới
+                        const mergedCombos = [...newCombos];
+                        savedExistingCombos.forEach(oldCombo => {
+                            const isUpdated = newCombos.some(c => c.sku === oldCombo.sku);
+                            if (!isUpdated) {
+                                mergedCombos.push(oldCombo); // Giữ combo cũ đã save
+                            }
+                        });
+                        
+                        mergedVariants[region] = {
+                            ...existingRegionVariants,
+                            ...newRegionVariants,
+                            variant_combinations: mergedCombos
+                        };
+                        
+                        console.log(`✅ Merged variants for region ${region}: ${existingCombos.length} old + ${newCombos.length} new = ${mergedCombos.length} total`);
+                    });
+                    
+                    updateData.variants = mergedVariants;
+                    
+                    console.log('📊 Variants merge summary:', {
+                        existing_regions: Object.keys(existingVariants),
+                        updated_regions: Object.keys(variants),
+                        final_regions: Object.keys(mergedVariants)
+                    });
+                } catch (err) {
+                    console.warn('⚠️ Could not merge variants, using new data:', err.message);
+                    updateData.variants = variants;
+                }
+                
+                // Tính calculated_price từ tất cả regions trong merged variants
+                const finalVariants = updateData.variants;
+                Object.keys(finalVariants).forEach(region => {
+                    const regionData = finalVariants[region];
+                    if (regionData?.variant_combinations && Array.isArray(regionData.variant_combinations)) {
                         regionData.variant_combinations.forEach(combo => {
                             if (combo.price) {
                                 const price = parseFloat(combo.price);
@@ -5483,7 +5531,7 @@ app.put('/api/mongo/sanpham/:id', async (req, res) => {
                     }
                 });
                 
-                console.log('✅ Variants data updated (grouped by region):', Object.keys(variants));
+                console.log('✅ Variants data merged (grouped by region):', Object.keys(finalVariants));
             } else {
                 console.log('📦 UPDATE: Flat variants structure detected (legacy)');
                 // Ensure all variants have variant_id (or create default variant with sql_product_id)
@@ -10586,7 +10634,6 @@ app.post('/api/orders', async (req, res) => {
         // Allocate primary warehouse (same region preferred)
         const primaryWarehouse = warehouses[0];
         const kho_giao_hang = primaryWarehouse.id;
-        const site_processed = primaryWarehouse.vung_id;
 
         // Check flash sale for all variants BEFORE transaction
         console.log('Checking flash sale for variants...');
@@ -10693,6 +10740,11 @@ app.post('/api/orders', async (req, res) => {
         }
         
         console.log('Items with warehouse allocation from inventory:', itemsWithWarehouse);
+
+        // Determine site_processed from the first item's site_origin (primary product region)
+        const site_processed = itemsWithWarehouse.length > 0 
+            ? itemsWithWarehouse[0].site_origin 
+            : vung_khach_hang;
 
         // Calculate chi_phi_noi_bo if cross-region fulfillment
         let chi_phi_noi_bo = 0;

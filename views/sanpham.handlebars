@@ -2423,12 +2423,12 @@
                         if (mongoData.hinh_anh && mongoData.hinh_anh.length > 0) {
                             console.log('🖼️ Loading existing images from MongoDB with avatar:', {
                                 hinh_anh: mongoData.hinh_anh,
-                                link_avatar: mongoData.link_avatar
+                                anh_dai_dien: mongoData.anh_dai_dien
                             });
                             if (window.simpleImageUploadManager) {
                                 window.simpleImageUploadManager.loadExistingImages({
                                     hinh_anh: mongoData.hinh_anh,
-                                    link_avatar: mongoData.link_avatar
+                                    anh_dai_dien: mongoData.anh_dai_dien
                                 });
                             }
                         }
@@ -2561,29 +2561,37 @@
                             }
                         }
                         
-                        // Thu thập tất cả ảnh từ variants và thêm vào hinh_anh nếu chưa có
+                        // Thu thập ảnh từ variants và thêm vào productImages (không reload lại)
                         if (hasVariants && variantsData && window.simpleImageUploadManager) {
-                            const allImages = mongoData.hinh_anh ? [...mongoData.hinh_anh] : [];
+                            const currentImageUrls = window.simpleImageUploadManager.productImages.map(f => f.url);
                             
                             // Iterate through NEW grouped structure
                             Object.keys(variantsData).forEach(region => {
                                 const regionData = variantsData[region];
                                 if (regionData?.variant_combinations && Array.isArray(regionData.variant_combinations)) {
                                     regionData.variant_combinations.forEach(combo => {
-                                        if (combo.image && !allImages.includes(combo.image)) {
-                                            allImages.push(combo.image);
+                                        if (combo.image && !currentImageUrls.includes(combo.image)) {
+                                            // Thêm vào productImages array (giữ nguyên mainImageIndex)
+                                            const mockFile = {
+                                                name: `variant_image_${combo.sku}.jpg`,
+                                                type: 'image/jpeg',
+                                                size: 0,
+                                                url: combo.image,
+                                                isExisting: true,
+                                                isVariantImage: true
+                                            };
+                                            window.simpleImageUploadManager.productImages.push(mockFile);
+                                            currentImageUrls.push(combo.image);
                                             console.log(`✅ Added variant image from ${region}:`, combo.image);
                                         }
                                     });
                                 }
                             });
                             
-                            // Reload images với tất cả ảnh (bao gồm cả variant images)
-                            if (allImages.length > 0) {
-                                window.simpleImageUploadManager.loadExistingImages({
-                                    hinh_anh: allImages,
-                                    link_avatar: mongoData.link_avatar
-                                });
+                            // Re-render preview (giữ nguyên mainImageIndex = 0)
+                            if (currentImageUrls.length > window.simpleImageUploadManager.productImages.length - (currentImageUrls.length - mongoData.hinh_anh?.length || 0)) {
+                                window.simpleImageUploadManager.renderProductImagesPreview();
+                                console.log('✅ Re-rendered preview with variant images, mainImageIndex unchanged');
                             }
                         }
 
@@ -2657,6 +2665,7 @@
 
         resetProductForm() {
             console.log('🔄 Resetting product form - clearing all data');
+            const wasEditing = this.currentEditId !== null;
             this.currentEditId = null;
             window.currentEditId = null; // Clear window reference
             
@@ -2664,7 +2673,10 @@
             if (window.simpleImageUploadManager) {
                 console.log('🗑️ Force resetting product images');
                 window.simpleImageUploadManager.productImages = [];
-                window.simpleImageUploadManager.mainImageIndex = 0;
+                // ⚠️ Không reset mainImageIndex nếu đang edit (sẽ được load lại từ anh_dai_dien)
+                if (!wasEditing) {
+                    window.simpleImageUploadManager.mainImageIndex = 0;
+                }
                 window.simpleImageUploadManager.productVideos = [];
                 window.simpleImageUploadManager.renderProductImagesPreview();
                 window.simpleImageUploadManager.renderProductVideosPreview();
@@ -2843,6 +2855,9 @@
                     const directCombinations = window.productVariantsManager ? window.productVariantsManager.combinations : [];
                     console.log('🔍 Direct combinations with imageFile:', directCombinations.map(c => ({sku: c.sku, hasImageFile: !!c.imageFile, hasSqlId: !!c.sql_variant_id, sqlId: c.sql_variant_id, image: c.image?.substring(0, 50)})));
                     
+                    // ✅ GIỮ LẠI: Không xóa variants cũ, chỉ update/tạo mới
+                    console.log('✅ Keeping old variants in SQL - only update/create');
+                    
                     if (directCombinations && directCombinations.length > 0) {
                         for (const combo of directCombinations) {
                             console.log(`🔎 Processing combo ${combo.sku}: sql_variant_id = ${combo.sql_variant_id}, hasImageFile = ${!!combo.imageFile}`);
@@ -2855,19 +2870,29 @@
                                             console.log(`📤 Uploading new image for variant ${combo.sku}...`);
                                             const newImageUrl = await window.simpleImageUploadManager.uploadSingleImage(combo.imageFile);
                                             
-                                            // Cập nhật combo hiện tại VÀ combo trong productVariantsManager.combinations
+                                            // Cập nhật combo hiện tại
                                             combo.image = newImageUrl;
                                             delete combo.imageFile;
                                             
-                                            // Tìm và cập nhật combo trong productVariantsManager để đồng bộ
-                                            if (window.productVariantsManager) {
-                                                const managerCombo = window.productVariantsManager.combinations.find(
-                                                    c => c.sql_variant_id === combo.sql_variant_id || c.sku === combo.sku
-                                                );
-                                                if (managerCombo) {
-                                                    managerCombo.image = newImageUrl;
-                                                    delete managerCombo.imageFile;
-                                                    console.log(`✅ Synced image URL to productVariantsManager for ${combo.sku}`);
+                                            // Tìm và cập nhật combo trong variantsByRegion theo từng vùng
+                                            if (window.productVariantsManager && window.productVariantsManager.variantsByRegion) {
+                                                let foundAndUpdated = false;
+                                                Object.keys(window.productVariantsManager.variantsByRegion).forEach(region => {
+                                                    const regionData = window.productVariantsManager.variantsByRegion[region];
+                                                    if (regionData && regionData.combinations) {
+                                                        const targetCombo = regionData.combinations.find(
+                                                            c => c.sql_variant_id === combo.sql_variant_id || c.sku === combo.sku
+                                                        );
+                                                        if (targetCombo) {
+                                                            targetCombo.image = newImageUrl;
+                                                            delete targetCombo.imageFile;
+                                                            console.log(`✅ Synced image URL to variantsByRegion[${region}] for ${combo.sku}`);
+                                                            foundAndUpdated = true;
+                                                        }
+                                                    }
+                                                });
+                                                if (!foundAndUpdated) {
+                                                    console.warn(`⚠️ Could not find combo ${combo.sku} in any region to sync image`);
                                                 }
                                             }
                                             
@@ -2939,19 +2964,29 @@
                                             console.log(`📤 Uploading image for new variant ${combo.sku}...`);
                                             imageUrl = await window.simpleImageUploadManager.uploadSingleImage(combo.imageFile);
                                             
-                                            // Cập nhật combo hiện tại VÀ combo trong productVariantsManager.combinations
+                                            // Cập nhật combo hiện tại
                                             combo.image = imageUrl;
                                             delete combo.imageFile;
                                             
-                                            // Tìm và cập nhật combo trong productVariantsManager để đồng bộ
-                                            if (window.productVariantsManager) {
-                                                const managerCombo = window.productVariantsManager.combinations.find(
-                                                    c => c.sku === combo.sku && c.site_origin === combo.site_origin
-                                                );
-                                                if (managerCombo) {
-                                                    managerCombo.image = imageUrl;
-                                                    delete managerCombo.imageFile;
-                                                    console.log(`✅ Synced image URL to productVariantsManager for ${combo.sku}`);
+                                            // Tìm và cập nhật combo trong variantsByRegion theo từng vùng
+                                            if (window.productVariantsManager && window.productVariantsManager.variantsByRegion) {
+                                                let foundAndUpdated = false;
+                                                Object.keys(window.productVariantsManager.variantsByRegion).forEach(region => {
+                                                    const regionData = window.productVariantsManager.variantsByRegion[region];
+                                                    if (regionData && regionData.combinations) {
+                                                        const targetCombo = regionData.combinations.find(
+                                                            c => c.sku === combo.sku && c.site_origin === combo.site_origin
+                                                        );
+                                                        if (targetCombo) {
+                                                            targetCombo.image = imageUrl;
+                                                            delete targetCombo.imageFile;
+                                                            console.log(`✅ Synced image URL to variantsByRegion[${region}] for ${combo.sku}`);
+                                                            foundAndUpdated = true;
+                                                        }
+                                                    }
+                                                });
+                                                if (!foundAndUpdated) {
+                                                    console.warn(`⚠️ Could not find combo ${combo.sku} in any region to sync image`);
                                                 }
                                             }
                                             
@@ -3283,6 +3318,30 @@
                             console.log('🖼️ Uploading product images...');
                             const uploadResult = await window.simpleImageUploadManager.uploadProductImages();
                             
+                            // 🎯 Update productImages với URL sau khi upload
+                            const mainImageIndex = window.simpleImageUploadManager.mainImageIndex;
+                            if (uploadResult.mainImageUrl && window.simpleImageUploadManager.productImages[mainImageIndex]) {
+                                window.simpleImageUploadManager.productImages[mainImageIndex] = {
+                                    name: 'uploaded_main.jpg',
+                                    url: uploadResult.mainImageUrl,
+                                    isExisting: true
+                                };
+                                console.log('✅ Updated main image with URL:', uploadResult.mainImageUrl.substring(0, 60));
+                            }
+                            
+                            // Update additional images với URL
+                            let additionalIndex = 0;
+                            window.simpleImageUploadManager.productImages.forEach((img, index) => {
+                                if (index !== mainImageIndex && img instanceof File && uploadResult.additionalImages[additionalIndex]) {
+                                    window.simpleImageUploadManager.productImages[index] = {
+                                        name: 'uploaded_additional.jpg',
+                                        url: uploadResult.additionalImages[additionalIndex],
+                                        isExisting: true
+                                    };
+                                    additionalIndex++;
+                                }
+                            });
+                            
                             if (uploadResult.mainImageUrl && !hinhAnhArray.includes(uploadResult.mainImageUrl)) {
                                 hinhAnhArray.push(uploadResult.mainImageUrl);
                             }
@@ -3356,13 +3415,51 @@
                                 }
                             });
                             
-                            console.log(`📸 Final images array: ${finalImages.length} images`);
+                            console.log(`📸 Final images array (before swap): ${finalImages.length} images`);
+                            console.log('Images:', finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
                             
-                            // Update MongoDB với array cuối cùng
-                            await ProductAPIService.updateProductMongoDetail(mongoDetailId, {
-                                hinh_anh: finalImages
+                            // 🎯 Lấy URL của ảnh chính từ productImages[mainImageIndex]
+                            const mainImageIndex = window.simpleImageUploadManager?.mainImageIndex || 0;
+                            const selectedMainImage = window.simpleImageUploadManager?.productImages[mainImageIndex];
+                            const mainImageUrl = selectedMainImage?.url || null;
+                            console.log(`🎯 Main image index: ${mainImageIndex}, URL:`, mainImageUrl?.substring(0, 60));
+                            
+                            let anhDaiDien = null;
+                            
+                            if (mainImageUrl) {
+                                // Tìm index của ảnh chính trong finalImages
+                                const mainIdx = finalImages.findIndex(img => img === mainImageUrl);
+                                console.log(`🔍 Found main image at index: ${mainIdx}`);
+                                
+                                if (mainIdx > 0) {
+                                    // Swap ảnh chính lên index 0
+                                    const temp = finalImages[0];
+                                    finalImages[0] = finalImages[mainIdx];
+                                    finalImages[mainIdx] = temp;
+                                    console.log(`🔄 Swapped index 0 ↔ index ${mainIdx}`);
+                                    console.log('Images after swap:', finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+                                }
+                                
+                                anhDaiDien = mainImageUrl;
+                            } else {
+                                // Không có mainImageUrl, dùng ảnh đầu tiên
+                                anhDaiDien = finalImages.length > 0 ? finalImages[0] : null;
+                                console.log('⚠️ No mainImageUrl found, using first image as main');
+                            }
+                            
+                            // Update MongoDB với array cuối cùng, ảnh đại diện và videos
+                            const updateResult = await ProductAPIService.updateProductMongoDetail(mongoDetailId, {
+                                hinh_anh: finalImages,
+                                anh_dai_dien: anhDaiDien,
+                                videos: videoUrls || []
                             });
-                            console.log('✅ Updated MongoDB hinh_anh array (removed deleted images + added new)');
+                            console.log('✅ Updated MongoDB successfully');
+                            console.log('📦 Data sent to MongoDB:', {
+                                hinh_anh: finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`),
+                                anh_dai_dien: anhDaiDien?.substring(0, 60) + '...',
+                                videos: videoUrls
+                            });
+                            console.log('📦 Update result:', updateResult);
                             
                             // Reset danh sách ảnh cần xoá sau khi đã xử lý xong
                             window.simpleImageUploadManager.imagesToDelete = [];
@@ -3632,6 +3729,30 @@
                         try {
                             const uploadResult = await window.simpleImageUploadManager.uploadProductImages();
                             
+                            // 🎯 Update productImages với URL sau khi upload (CREATE mode)
+                            const mainImageIndex = window.simpleImageUploadManager.mainImageIndex;
+                            if (uploadResult.mainImageUrl && window.simpleImageUploadManager.productImages[mainImageIndex]) {
+                                window.simpleImageUploadManager.productImages[mainImageIndex] = {
+                                    name: 'uploaded_main.jpg',
+                                    url: uploadResult.mainImageUrl,
+                                    isExisting: true
+                                };
+                                console.log('✅ Updated main image with URL (CREATE):', uploadResult.mainImageUrl.substring(0, 60));
+                            }
+                            
+                            // Update additional images với URL
+                            let additionalIndex = 0;
+                            window.simpleImageUploadManager.productImages.forEach((img, index) => {
+                                if (index !== mainImageIndex && img instanceof File && uploadResult.additionalImages[additionalIndex]) {
+                                    window.simpleImageUploadManager.productImages[index] = {
+                                        name: 'uploaded_additional.jpg',
+                                        url: uploadResult.additionalImages[additionalIndex],
+                                        isExisting: true
+                                    };
+                                    additionalIndex++;
+                                }
+                            });
+                            
                             if (uploadResult.mainImageUrl && !hinhAnhArray.includes(uploadResult.mainImageUrl)) {
                                 hinhAnhArray.push(uploadResult.mainImageUrl);
                             }
@@ -3679,13 +3800,53 @@
                     console.log('📊 Valid images (filtered data URLs):', validHinhAnh);
                     console.log('📸 Main image (link_avatar/link_anh_dai_dien):', link_anh_dai_dien);
                     
-                    // BƯỚC 6: Cập nhật SQL với links ảnh/video
-                    console.log('📝 Step 6: Updating SQL with media links...');
+                    // BƯỚC 6: Cập nhật SQL và MongoDB với links ảnh/video
+                    console.log('📝 Step 6: Updating SQL and MongoDB with media links...');
                     
-                    // ⚠️ KHÔNG CẦN update MongoDB ở Step 6 vì:
-                    // - Step 3 đã tạo MongoDB document với TOÀN BỘ data rồi
-                    // - Nếu update lại ở đây chỉ với media thì sẽ GHI ĐÈ và MẤT các fields khác!
-                    console.log('ℹ️ Step 6: Skipping MongoDB update (already done in Step 3)');
+                    // Update MongoDB với hinh_anh và anh_dai_dien
+                    if (mongoDetailId) {
+                        try {
+                            console.log(`📸 Valid images (before swap): ${validHinhAnh.length} images`);
+                            console.log('Images:', validHinhAnh.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+                            
+                            // 🎯 Lấy URL của ảnh chính từ productImages[mainImageIndex] (CREATE mode)
+                            const mainImageIndex = window.simpleImageUploadManager?.mainImageIndex || 0;
+                            const selectedMainImage = window.simpleImageUploadManager?.productImages[mainImageIndex];
+                            const mainImageUrl = selectedMainImage?.url || null;
+                            console.log(`🎯 Main image index: ${mainImageIndex}, URL:`, mainImageUrl?.substring(0, 60));
+                            
+                            let anhDaiDien = null;
+                            
+                            if (mainImageUrl) {
+                                // Tìm index của ảnh chính trong validHinhAnh
+                                const mainIdx = validHinhAnh.findIndex(img => img === mainImageUrl);
+                                console.log(`🔍 Found main image at index: ${mainIdx}`);
+                                
+                                if (mainIdx > 0) {
+                                    // Swap ảnh chính lên index 0
+                                    const temp = validHinhAnh[0];
+                                    validHinhAnh[0] = validHinhAnh[mainIdx];
+                                    validHinhAnh[mainIdx] = temp;
+                                    console.log(`🔄 Swapped index 0 ↔ index ${mainIdx}`);
+                                    console.log('Images after swap:', validHinhAnh.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+                                }
+                                
+                                anhDaiDien = mainImageUrl;
+                            } else {
+                                // Không có mainImageUrl, dùng ảnh đầu tiên
+                                anhDaiDien = validHinhAnh.length > 0 ? validHinhAnh[0] : null;
+                                console.log('⚠️ No mainImageUrl found, using first image as main');
+                            }
+                            await ProductAPIService.updateProductMongoDetail(mongoDetailId, {
+                                hinh_anh: validHinhAnh,
+                                anh_dai_dien: anhDaiDien,
+                                videos: videoUrls || []
+                            });
+                            console.log('✅ Updated MongoDB hinh_anh, anh_dai_dien and videos (CREATE mode):', { anhDaiDien, videos: videoUrls });
+                        } catch (error) {
+                            console.error('❌ Error updating MongoDB hinh_anh:', error);
+                        }
+                    }
 
                     // Cập nhật SQL products với link_anh_dai_dien
                     await ProductAPIService.updateProduct(productId, { 
@@ -6789,6 +6950,12 @@ class SimpleImageUploadManager {
         previewSection.classList.remove('hidden');
         emptyState.classList.add('hidden');
 
+        console.log('🖼️ Rendering product images preview:', {
+            totalImages: this.productImages.length,
+            mainImageIndex: this.mainImageIndex,
+            images: this.productImages.map((f, i) => ({ index: i, url: f.url?.substring(0, 60), isMain: i === this.mainImageIndex }))
+        });
+
         this.productImages.forEach((file, index) => {
             const imageItem = document.createElement('div');
             imageItem.className = `image-preview-item ${index === this.mainImageIndex ? 'main-image' : ''}`;
@@ -7067,26 +7234,18 @@ class SimpleImageUploadManager {
 
     // Trong SimpleImageUploadManager
     loadExistingImages(existingData = {}) {
-        const { hinh_anh = [], link_avatar = '' } = existingData;
+        const { hinh_anh = [], anh_dai_dien = '' } = existingData;
         
         if (hinh_anh.length === 0) return;
 
-        console.log('📥 Loading existing images with avatar:', { hinh_anh, link_avatar });
+        console.log('📥 ==================== LOADING EXISTING IMAGES ====================');
+        console.log('📥 hinh_anh array:', hinh_anh.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+        console.log('📥 anh_dai_dien:', anh_dai_dien?.substring(0, 60) + '...');
         
         this.productImages = [];
+        // 🎯 Ảnh chính (anh_dai_dien) luôn ở vị trí 0 trong array hinh_anh
         this.mainImageIndex = 0;
-
-        // Tìm index của ảnh chính (link_avatar) trong mảng hinh_anh
-        if (link_avatar) {
-            const avatarIndex = hinh_anh.findIndex(url => url === link_avatar);
-            if (avatarIndex !== -1) {
-                this.mainImageIndex = avatarIndex;
-                console.log('✅ Found main image at index:', this.mainImageIndex);
-            } else {
-                console.log('⚠️ Main image not found in images array, using first image');
-                this.mainImageIndex = 0;
-            }
-        }
+        console.log('✅ Set mainImageIndex = 0 (anh_dai_dien at index 0)');
 
         // Tạo mock files từ URLs
         hinh_anh.forEach((url, index) => {
@@ -10084,12 +10243,15 @@ class ProductVariantsManager {
             };
         });
 
-        // MERGE: Giữ lại combinations cũ không match + Thêm combinations mới
-        const remainingOldCombos = Object.values(existingCombosByAttributes);
+        // ✅ CHỈ GIỮ ĐÃ SAVE: Chỉ giữ combinations đã lưu SQL (có sql_variant_id)
+        const remainingOldCombos = Object.values(existingCombosByAttributes).filter(combo => {
+            return combo.sql_variant_id; // Chỉ giữ nếu đã save trong SQL
+        });
+        
         this.variantsByRegion[region].combinations = [...remainingOldCombos, ...newCombinations];
 
         console.log(`✅ Auto-generated combinations for ${region}:`, {
-            old_kept: remainingOldCombos.length,
+            old_kept_with_sql_id: remainingOldCombos.length,
             new_created: newCombinations.length,
             total: this.variantsByRegion[region].combinations.length
         });
@@ -10323,8 +10485,14 @@ class ProductVariantsManager {
                 if (!file) return;
 
                 const comboId = e.target.getAttribute('data-combo-id');
-                const combo = this.combinations.find(c => c.id === comboId);
-                if (!combo) return;
+                const region = e.target.getAttribute('data-region');
+                
+                // Find combo in the specific region
+                const combo = this.variantsByRegion[region]?.combinations?.find(c => c.id === comboId);
+                if (!combo) {
+                    console.error(`❌ Combo not found in region "${region}":`, comboId);
+                    return;
+                }
 
                 // Validate image file
                 if (!file.type.startsWith('image/')) {
@@ -10338,21 +10506,24 @@ class ProductVariantsManager {
                     combo.image = event.target.result; // Data URL for preview
                     combo.imageFile = file; // Store file object for later upload
                     console.log(`📸 Image file selected for ${combo.sku}: ${file.name}`);
+                    console.log(`🔍 Region: "${region}", Combo ID: ${combo.id}`);
+                    console.log(`🔍 Combo updated:`, {hasImage: !!combo.image, hasFile: !!combo.imageFile, imagePreview: combo.image?.substring(0, 50)});
                     
-                    // Add to product images for preview
+                    // Thêm vào product images preview
                     if (!window.simpleImageUploadManager.productImages.some(img => img.file === file)) {
                         window.simpleImageUploadManager.productImages.push({ 
                             url: event.target.result,
                             file: file,
                             name: file.name,
-                            type: 'variant'
+                            type: 'variant',
+                            variantSku: combo.sku
                         });
                         window.simpleImageUploadManager.renderProductImagesPreview();
-                        console.log('✅ Added variant image to preview');
+                        console.log('✅ Added variant image to product preview');
                     }
                     
-                    // Re-render to show preview
-                    this.renderCombinations();
+                    // Re-render to show preview for this region
+                    this.renderCombinations(region);
                 };
                 reader.readAsDataURL(file);
             });
@@ -10371,11 +10542,12 @@ class ProductVariantsManager {
                 e.stopPropagation();
                 e.preventDefault();
                 
-                // Lấy combo ID từ button (không phải từ e.target vì có thể click vào icon)
+                // Lấy combo ID và region từ button
                 const button = e.currentTarget;
                 const comboId = button.getAttribute('data-combo-id');
+                const region = button.getAttribute('data-region');
                 
-                console.log('🗑️ Edit image clicked for combo:', comboId);
+                console.log('🗑️ Edit image clicked for combo:', comboId, 'region:', region);
                 
                 // Create temporary input
                 const tempInput = document.createElement('input');
@@ -10386,8 +10558,12 @@ class ProductVariantsManager {
                     const file = event.target.files[0];
                     if (!file) return;
 
-                    const combo = this.combinations.find(c => c.id === comboId);
-                    if (!combo) return;
+                    // Find combo in the specific region
+                    const combo = this.variantsByRegion[region]?.combinations?.find(c => c.id === comboId);
+                    if (!combo) {
+                        console.error(`❌ Combo not found in region "${region}":`, comboId);
+                        return;
+                    }
 
                     // Validate image file
                     if (!file.type.startsWith('image/')) {
@@ -10400,21 +10576,21 @@ class ProductVariantsManager {
                     reader.onload = (evt) => {
                         const oldCloudinaryUrl = combo.image && !combo.image.startsWith('data:') ? combo.image : null;
                         
-                        // Remove old image from product images (both file and URL)
+                        // Xóa ảnh cũ khỏi product images preview
                         if (combo.imageFile) {
-                            // Remove old file
                             const fileIdx = window.simpleImageUploadManager.productImages.findIndex(img => img.file === combo.imageFile);
                             if (fileIdx !== -1) {
                                 window.simpleImageUploadManager.productImages.splice(fileIdx, 1);
+                                console.log('🗑️ Removed old variant file from preview');
                             }
                         } else if (combo.image) {
-                            // Remove old Cloudinary URL from preview
                             const urlIdx = window.simpleImageUploadManager.productImages.findIndex(img => img.url === combo.image);
                             if (urlIdx !== -1) {
                                 window.simpleImageUploadManager.productImages.splice(urlIdx, 1);
+                                console.log('🗑️ Removed old variant URL from preview');
                             }
                         }
-
+                        
                         // Đánh dấu ảnh cũ để xóa khi Save (nếu là ảnh từ Cloudinary)
                         if (oldCloudinaryUrl) {
                             if (!window.simpleImageUploadManager.imagesToDelete) {
@@ -10430,16 +10606,18 @@ class ProductVariantsManager {
                         combo.imageFile = file; // Store file object for later upload
                         console.log(`📸 Image file updated for ${combo.sku}: ${file.name}`);
                         
-                        // Add new file to product images
+                        // Thêm ảnh mới vào product images preview
                         window.simpleImageUploadManager.productImages.push({ 
                             url: evt.target.result,
                             file: file,
                             name: file.name,
-                            type: 'variant'
+                            type: 'variant',
+                            variantSku: combo.sku
                         });
                         window.simpleImageUploadManager.renderProductImagesPreview();
+                        console.log('✅ Updated variant image in product preview');
                         
-                        this.renderCombinations();
+                        this.renderCombinations(region);
                     };
                     reader.readAsDataURL(file);
                     
@@ -10456,12 +10634,17 @@ class ProductVariantsManager {
                 e.stopPropagation();
                 e.preventDefault();
                 
-                // Lấy combo ID từ button
+                // Lấy combo ID và region từ button
                 const button = e.currentTarget;
                 const comboId = button.getAttribute('data-combo-id');
+                const region = button.getAttribute('data-region');
                 
-                const combo = this.combinations.find(c => c.id === comboId);
-                if (!combo) return;
+                // Find combo in the specific region
+                const combo = this.variantsByRegion[region]?.combinations?.find(c => c.id === comboId);
+                if (!combo) {
+                    console.error(`❌ Combo not found in region "${region}":`, comboId);
+                    return;
+                }
                 
                 const cloudinaryUrl = combo.image && !combo.image.startsWith('data:') ? combo.image : null;
                 
@@ -10489,29 +10672,47 @@ class ProductVariantsManager {
                         console.log('📝 Marked variant image for deletion on save:', cloudinaryUrl);
                     }
                     
-                    // Remove from product images preview
+                    // Xóa khỏi product images preview và cập nhật mainImageIndex
+                    let deletedIndex = -1;
                     if (combo.imageFile) {
-                        const idx = window.simpleImageUploadManager.productImages.findIndex(img => img.file === combo.imageFile);
-                        if (idx !== -1) {
-                            window.simpleImageUploadManager.productImages.splice(idx, 1);
-                            console.log('🗑️ Removed variant file from preview');
+                        deletedIndex = window.simpleImageUploadManager.productImages.findIndex(img => img.file === combo.imageFile);
+                        if (deletedIndex !== -1) {
+                            window.simpleImageUploadManager.productImages.splice(deletedIndex, 1);
+                            console.log('🗑️ Removed variant file from product preview at index:', deletedIndex);
                         }
                     } else if (combo.image) {
-                        const idx = window.simpleImageUploadManager.productImages.findIndex(img => img.url === combo.image);
-                        if (idx !== -1) {
-                            window.simpleImageUploadManager.productImages.splice(idx, 1);
-                            console.log('🗑️ Removed variant image URL from preview');
+                        deletedIndex = window.simpleImageUploadManager.productImages.findIndex(img => img.url === combo.image);
+                        if (deletedIndex !== -1) {
+                            window.simpleImageUploadManager.productImages.splice(deletedIndex, 1);
+                            console.log('🗑️ Removed variant URL from product preview at index:', deletedIndex);
                         }
                     }
                     
-                    // Update preview
+                    // ✅ Điều chỉnh mainImageIndex nếu cần (giống deleteProductImage)
+                    if (deletedIndex !== -1) {
+                        if (window.simpleImageUploadManager.mainImageIndex === deletedIndex) {
+                            window.simpleImageUploadManager.mainImageIndex = 0;
+                            console.log('🔄 Main image deleted, setting new main image index to 0');
+                        } else if (deletedIndex < window.simpleImageUploadManager.mainImageIndex) {
+                            window.simpleImageUploadManager.mainImageIndex--;
+                            console.log('🔄 Adjusted main image index to:', window.simpleImageUploadManager.mainImageIndex);
+                        }
+                    }
+                    
                     window.simpleImageUploadManager.renderProductImagesPreview();
                     
                     combo.image = '';
                     combo.imageFile = null;
                     console.log(`🗑️ Image removed from variant ${combo.sku}`);
-                    this.renderCombinations();
-                    window.simpleImageUploadManager.showSuccess('Đã xóa ảnh khỏi variant. Nhớ lưu để xóa vĩnh viễn.');
+                    this.renderCombinations(region);
+                    
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Đã xóa ảnh',
+                        text: 'Ảnh đã được xóa khỏi variant. Nhớ lưu để xóa vĩnh viễn.',
+                        timer: 2000,
+                        showConfirmButton: false
+                    });
                 }
             });
         });
@@ -10630,9 +10831,16 @@ class ProductVariantsManager {
                         linkAnh = null;
                         console.log(`⚠️ Variant ${c.sku} (${region}): Skipping data URL (not uploaded yet)`);
                     } else {
-                        // Nếu là URL Cloudinary thì lưu vào MongoDB
-                        linkAnh = c.image;
-                        console.log(`✅ Variant ${c.sku} (${region}): Using Cloudinary URL`);
+                        // ✅ Kiểm tra xem ảnh có bị đánh dấu xóa không
+                        const imagesToDeleteSet = new Set(window.simpleImageUploadManager?.imagesToDelete || []);
+                        if (imagesToDeleteSet.has(c.image)) {
+                            linkAnh = null;
+                            console.log(`🗑️ Variant ${c.sku} (${region}): Image marked for deletion, setting link_anh to null`);
+                        } else {
+                            // Nếu là URL Cloudinary và không bị xóa thì lưu vào MongoDB
+                            linkAnh = c.image;
+                            console.log(`✅ Variant ${c.sku} (${region}): Using Cloudinary URL`);
+                        }
                     }
                 } else {
                     console.log(`ℹ️ Variant ${c.sku} (${region}): No image`);
@@ -11744,7 +11952,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Hiện form giá đơn giản, ẩn quản lý biến thể
                 simpleProductPricing.style.display = 'block';
                 variantsManagement.style.display = 'none';
-                addVariantTypeBtn.style.display = 'none';
+                if (addVariantTypeBtn) addVariantTypeBtn.style.display = 'none';
                 
                 // Đặt required cho form đơn giản
                 document.getElementById('simpleListPrice').required = true;
@@ -11756,7 +11964,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Hiện quản lý biến thể, ẩn form giá đơn giản
                 simpleProductPricing.style.display = 'none';
                 variantsManagement.style.display = 'block';
-                addVariantTypeBtn.style.display = 'inline-block';
+                if (addVariantTypeBtn) addVariantTypeBtn.style.display = 'inline-block';
                 
                 // Bỏ required cho form đơn giản
                 document.getElementById('simpleListPrice').required = false;

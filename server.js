@@ -7,8 +7,8 @@ dotenv.config();
 
 // Cấu hình SQL Server từ biến môi trường
 const dbConfig = {
-  server: process.env.SQL_SERVER || 'localhost',
-  database: process.env.SQL_DATABASE || 'CSDLNC_WebPhone',
+  server: process.env.SQL_SERVER_NAM || 'localhost',
+  database: process.env.SQL_DATABASE_NAM || 'CSDLNC_WebPhone',
   user: process.env.SQL_USER || 'sa',
   password: process.env.SQL_PASSWORD,
   options: {

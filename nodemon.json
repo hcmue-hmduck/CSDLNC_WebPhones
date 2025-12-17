@@ -1,5 +1,16 @@
 {
-  "watch": ["app.js"],
-  "ignore": ["views/**", "public/**", "node_modules/**"],
-  "ext": "js"
+  "watch": [
+    "app.js",
+    "server.js",
+    "app/",
+    ".env"
+  ],
+  "ignore": [
+    "views/**",
+    "public/**", 
+    "node_modules/**",
+    "temp_uploads/**"
+  ],
+  "ext": "js,json,env",
+  "delay": "1000"
 }
