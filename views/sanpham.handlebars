@@ -3408,29 +3408,38 @@
                     // Ảnh sẽ được lưu vào variants[region].hinh_anh thông qua updatedVariantsData
                     if (mongoDetailId) {
                         try {
-                            // 🎲 Chọn ảnh đại diện RANDOM từ bất kỳ region nào có ảnh
+                            // 🎲 Chọn ảnh đại diện RANDOM từ bất kỳ region nào có ảnh (chỉ khi chưa có)
                             let anhDaiDien = null;
                             
-                            // Thu thập tất cả ảnh từ các regions
-                            const allRegionImages = [];
-                            if (updatedVariantsData && typeof updatedVariantsData === 'object') {
-                                for (const region of Object.keys(updatedVariantsData)) {
-                                    if (updatedVariantsData[region]?.hinh_anh?.length > 0) {
-                                        allRegionImages.push(...updatedVariantsData[region].hinh_anh);
+                            // Kiểm tra xem MongoDB đã có anh_dai_dien chưa
+                            const existingMongoData = await ProductAPIService.getProductMongoDetail(productId);
+                            if (existingMongoData.success && existingMongoData.data?.anh_dai_dien) {
+                                anhDaiDien = existingMongoData.data.anh_dai_dien;
+                                console.log('✅ Giữ nguyên anh_dai_dien hiện tại:', anhDaiDien?.substring(0, 60));
+                            } else {
+                                console.log('🎲 anh_dai_dien đang empty, sẽ random chọn...');
+                                
+                                // Thu thập tất cả ảnh từ các regions
+                                const allRegionImages = [];
+                                if (updatedVariantsData && typeof updatedVariantsData === 'object') {
+                                    for (const region of Object.keys(updatedVariantsData)) {
+                                        if (updatedVariantsData[region]?.hinh_anh?.length > 0) {
+                                            allRegionImages.push(...updatedVariantsData[region].hinh_anh);
+                                        }
                                     }
                                 }
-                            }
-                            
-                            // Chọn random từ các ảnh có sẵn
-                            if (allRegionImages.length > 0) {
-                                const randomIndex = Math.floor(Math.random() * allRegionImages.length);
-                                anhDaiDien = allRegionImages[randomIndex];
-                                console.log(`🎲 Randomly selected main image (${randomIndex + 1}/${allRegionImages.length}):`, anhDaiDien?.substring(0, 60));
-                            } else if (validHinhAnh.length > 0) {
-                                // Fallback: nếu không có ảnh trong variants, dùng product images
-                                const randomIndex = Math.floor(Math.random() * validHinhAnh.length);
-                                anhDaiDien = validHinhAnh[randomIndex];
-                                console.log(`🎲 No variant images, randomly selected from product images (${randomIndex + 1}/${validHinhAnh.length}):`, anhDaiDien?.substring(0, 60));
+                                
+                                // Chọn random từ các ảnh có sẵn
+                                if (allRegionImages.length > 0) {
+                                    const randomIndex = Math.floor(Math.random() * allRegionImages.length);
+                                    anhDaiDien = allRegionImages[randomIndex];
+                                    console.log(`🎲 Randomly selected main image (${randomIndex + 1}/${allRegionImages.length}):`, anhDaiDien?.substring(0, 60));
+                                } else if (validHinhAnh.length > 0) {
+                                    // Fallback: nếu không có ảnh trong variants, dùng product images
+                                    const randomIndex = Math.floor(Math.random() * validHinhAnh.length);
+                                    anhDaiDien = validHinhAnh[randomIndex];
+                                    console.log(`🎲 No variant images, randomly selected from product images (${randomIndex + 1}/${validHinhAnh.length}):`, anhDaiDien?.substring(0, 60));
+                                }
                             }
                             
                             // ⚠️ Update MongoDB chỉ với anh_dai_dien và videos
@@ -3795,29 +3804,38 @@
                             // 🔄 CREATE MongoDB - KHÔNG dùng root hinh_anh nữa
                             // Ảnh sẽ được lưu vào variants[region].hinh_anh thông qua updatedVariantsData
                             
-                            // 🎲 Chọn ảnh đại diện RANDOM từ bất kỳ region nào có ảnh
+                            // 🎲 Chọn ảnh đại diện RANDOM từ bất kỳ region nào có ảnh (chỉ khi chưa có)
                             let anhDaiDien = null;
                             
-                            // Thu thập tất cả ảnh từ các regions
-                            const allRegionImages = [];
-                            if (updatedVariantsData && typeof updatedVariantsData === 'object') {
-                                for (const region of Object.keys(updatedVariantsData)) {
-                                    if (updatedVariantsData[region]?.hinh_anh?.length > 0) {
-                                        allRegionImages.push(...updatedVariantsData[region].hinh_anh);
+                            // Kiểm tra xem MongoDB đã có anh_dai_dien chưa (trường hợp edit lại sau khi create)
+                            const existingMongoData = await ProductAPIService.getProductMongoDetail(productId);
+                            if (existingMongoData.success && existingMongoData.data?.anh_dai_dien) {
+                                anhDaiDien = existingMongoData.data.anh_dai_dien;
+                                console.log('✅ Giữ nguyên anh_dai_dien hiện tại:', anhDaiDien?.substring(0, 60));
+                            } else {
+                                console.log('🎲 anh_dai_dien đang empty, sẽ random chọn...');
+                                
+                                // Thu thập tất cả ảnh từ các regions
+                                const allRegionImages = [];
+                                if (updatedVariantsData && typeof updatedVariantsData === 'object') {
+                                    for (const region of Object.keys(updatedVariantsData)) {
+                                        if (updatedVariantsData[region]?.hinh_anh?.length > 0) {
+                                            allRegionImages.push(...updatedVariantsData[region].hinh_anh);
+                                        }
                                     }
                                 }
-                            }
-                            
-                            // Chọn random từ các ảnh có sẵn
-                            if (allRegionImages.length > 0) {
-                                const randomIndex = Math.floor(Math.random() * allRegionImages.length);
-                                anhDaiDien = allRegionImages[randomIndex];
-                                console.log(`🎲 Randomly selected main image (${randomIndex + 1}/${allRegionImages.length}):`, anhDaiDien?.substring(0, 60));
-                            } else if (validHinhAnh.length > 0) {
-                                // Fallback: nếu không có ảnh trong variants, dùng product images
-                                const randomIndex = Math.floor(Math.random() * validHinhAnh.length);
-                                anhDaiDien = validHinhAnh[randomIndex];
-                                console.log(`🎲 No variant images, randomly selected from product images (${randomIndex + 1}/${validHinhAnh.length}):`, anhDaiDien?.substring(0, 60));
+                                
+                                // Chọn random từ các ảnh có sẵn
+                                if (allRegionImages.length > 0) {
+                                    const randomIndex = Math.floor(Math.random() * allRegionImages.length);
+                                    anhDaiDien = allRegionImages[randomIndex];
+                                    console.log(`🎲 Randomly selected main image (${randomIndex + 1}/${allRegionImages.length}):`, anhDaiDien?.substring(0, 60));
+                                } else if (validHinhAnh.length > 0) {
+                                    // Fallback: nếu không có ảnh trong variants, dùng product images
+                                    const randomIndex = Math.floor(Math.random() * validHinhAnh.length);
+                                    anhDaiDien = validHinhAnh[randomIndex];
+                                    console.log(`🎲 No variant images, randomly selected from product images (${randomIndex + 1}/${validHinhAnh.length}):`, anhDaiDien?.substring(0, 60));
+                                }
                             }
                             
                             // ⚠️ Update MongoDB chỉ với anh_dai_dien và videos
@@ -8103,9 +8121,36 @@ class SimpleImageUploadManager {
                 }
             });
 
+            // ⚠️ Kiểm tra nếu ảnh bị xóa là anh_dai_dien, chọn ảnh mới random
+            let newAnhDaiDien = currentData.anh_dai_dien;
+            
+            if (currentData.anh_dai_dien === imageUrl) {
+                console.log('⚠️ Deleted image was anh_dai_dien, selecting new random image...');
+                
+                // Thu thập tất cả ảnh còn lại từ các regions
+                const remainingImages = [];
+                Object.keys(variants).forEach(region => {
+                    if (variants[region]?.hinh_anh?.length > 0) {
+                        remainingImages.push(...variants[region].hinh_anh);
+                    }
+                });
+                
+                if (remainingImages.length > 0) {
+                    // Random chọn ảnh mới
+                    const randomIndex = Math.floor(Math.random() * remainingImages.length);
+                    newAnhDaiDien = remainingImages[randomIndex];
+                    console.log(`🎲 Selected new anh_dai_dien (${randomIndex + 1}/${remainingImages.length}):`, newAnhDaiDien?.substring(0, 60));
+                } else {
+                    // Không còn ảnh nào
+                    newAnhDaiDien = null;
+                    console.log('⚠️ No images remaining, anh_dai_dien set to null');
+                }
+            }
+
             // Cập nhật document MongoDB
             const updateData = {
                 variants: variants,
+                anh_dai_dien: newAnhDaiDien,
                 updatedAt: new Date()
             };
 

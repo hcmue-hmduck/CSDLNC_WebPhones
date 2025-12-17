@@ -36,13 +36,9 @@
             <div class="cps-image-counter" id="imageCounter">1 / 1</div>
           </div>
 
-          <!-- Ảnh thumbnail (nếu có nhiều ảnh) -->
+          <!-- Ảnh thumbnail (sẽ được load theo region) -->
           <div class="cps-thumbnail-list" id="thumbnailList">
-            {{#each product.hinh_anh_phu}}
-            <div class="cps-thumb{{#if @first}} active{{/if}}" data-image="{{this}}" data-index="{{@index}}">
-              <img src="{{this}}" alt="Ảnh {{@index}}">
-            </div>
-            {{/each}}
+            <!-- Thumbnails will be dynamically loaded based on selected region -->
           </div>
         </div>
       </div>
@@ -1711,24 +1707,12 @@ document.addEventListener('DOMContentLoaded', function() {
   let autoSlideInterval = null;
   
   function initializeGallery() {
-    // Collect images from thumbnails
-    thumbnails.forEach(thumb => {
-      const imgSrc = thumb.getAttribute('data-image');
-      if (imgSrc) {
-        allImages.push(imgSrc);
-      }
-    });
+    // Images will be loaded dynamically when user selects region
+    // For now, just show default product image
+    console.log('🖼️ Gallery initialized - waiting for region selection to load images');
     
-    // Set first image as main
-    if (allImages.length > 0 && mainImage) {
-      mainImage.src = allImages[0];
-    }
-    
-    // Update counter
+    // Update counter (will show 0 initially)
     updateCounter();
-    
-    // Start auto slide
-    startAutoSlide();
   }
   
   function updateCounter() {
@@ -1994,8 +1978,79 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
     
+    // Load images for selected region
+    loadImagesForRegion(selectedOrigin);
+    
     buildVariantsUI(selectedOrigin);
     setupVariantOptionListeners(selectedOrigin);
+  }
+  
+  // Load images for a specific region from mongoVariants
+  function loadImagesForRegion(region) {
+    console.log('🖼️ Loading images for region:', region);
+    
+    if (!mongoVariants || !mongoVariants[region]) {
+      console.warn('⚠️ No variants data for region:', region);
+      return;
+    }
+    
+    const regionData = mongoVariants[region];
+    const images = regionData.hinh_anh || [];
+    
+    console.log('📸 Found', images.length, 'images for region', region);
+    
+    if (images.length === 0) {
+      console.warn('⚠️ No images for region:', region);
+      // Keep default product image
+      return;
+    }
+    
+    // Update main image with random selection from region
+    const mainImage = document.getElementById('mainProductImage');
+    if (mainImage && images.length > 0) {
+      const randomIndex = Math.floor(Math.random() * images.length);
+      mainImage.src = images[randomIndex];
+      console.log('🎲 Set main image (random):', images[randomIndex].substring(0, 60));
+    }
+    
+    // Rebuild thumbnails
+    const thumbnailList = document.getElementById('thumbnailList');
+    if (!thumbnailList) return;
+    
+    thumbnailList.innerHTML = '';
+    
+    images.forEach((imgUrl, index) => {
+      const thumbDiv = document.createElement('div');
+      thumbDiv.className = 'cps-thumb' + (index === 0 ? ' active' : '');
+      thumbDiv.setAttribute('data-image', imgUrl);
+      thumbDiv.setAttribute('data-index', index);
+      
+      const img = document.createElement('img');
+      img.src = imgUrl;
+      img.alt = `Ảnh ${index + 1}`;
+      
+      thumbDiv.appendChild(img);
+      thumbnailList.appendChild(thumbDiv);
+    });
+    
+    // Reinitialize gallery with new images
+    allImages = [...images];
+    currentImageIndex = 0;
+    
+    // Rebind thumbnail click events
+    const thumbnails = document.querySelectorAll('.cps-thumb');
+    thumbnails.forEach((thumb, index) => {
+      thumb.addEventListener('click', function() {
+        stopAutoSlide();
+        showImage(index);
+        startAutoSlide();
+      });
+    });
+    
+    updateCounter();
+    startAutoSlide();
+    
+    console.log('✅ Gallery updated with', images.length, 'images');
   }
   
   // Setup listeners for variant buttons (click to select variant directly)
@@ -2277,6 +2332,9 @@ document.addEventListener('DOMContentLoaded', function() {
     if (siteOriginSelect) {
       siteOriginSelect.value = targetOrigin;
       console.log('🎯 Auto-selected site_origin:', targetOrigin);
+      
+      // Load images for this region
+      loadImagesForRegion(targetOrigin);
       
       // Trigger UI build
       buildVariantsUI(targetOrigin);
@@ -2648,6 +2706,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!urlParams.get('variant') && mongoVariants && Object.keys(mongoVariants).length === 1) {
       const firstOrigin = Object.keys(mongoVariants)[0];
       siteOriginSelect.value = firstOrigin;
+      loadImagesForRegion(firstOrigin); // Load images for default region
       onSiteOriginChange();
     }
   }
