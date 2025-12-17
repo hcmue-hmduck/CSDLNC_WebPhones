@@ -11203,7 +11203,10 @@ app.get('/api/orders/:orderId', async (req, res) => {
                     w.ten_phuong_xa,
                     p.ten_tinh as ten_tinh_thanh,
                     r.ten_vung,
-                    wh.ten_kho
+                    wh.ten_kho,
+                    sm.ten_phuong_thuc,
+                    smr.chi_phi_van_chuyen,
+                    smr.thoi_gian_giao_du_kien
                 FROM orders o
                 LEFT JOIN users u ON o.nguoi_dung_id = u.id
                 LEFT JOIN user_addresses ua ON o.dia_chi_giao_hang_id = ua.id
@@ -11211,6 +11214,8 @@ app.get('/api/orders/:orderId', async (req, res) => {
                 LEFT JOIN provinces p ON w.tinh_thanh_id = p.id
                 LEFT JOIN regions r ON o.vung_don_hang = r.ma_vung
                 LEFT JOIN warehouses wh ON o.kho_giao_hang = wh.id
+                LEFT JOIN shipping_method_regions smr ON o.shipping_method_region_id = smr.id
+                LEFT JOIN shipping_methods sm ON smr.shipping_method_id = sm.id
                 WHERE o.id = @orderId
             `);
 
