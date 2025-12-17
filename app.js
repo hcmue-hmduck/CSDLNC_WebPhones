@@ -8418,7 +8418,8 @@ app.get('/admin/donhang', requireAdmin, async (req, res) => {
         
         res.render('donhang', { 
             layout: 'AdminMain', 
-            title: 'Quản lý Đơn hàng'
+            title: 'Quản lý Đơn hàng',
+            user: req.session.user
         });
         
     } catch (err) {
@@ -8618,12 +8619,23 @@ app.get('/api/donhang/:id', async (req, res) => {
 console.log('✅ Order API routes registered at /api/donhang');
 
 // PUT /api/donhang/:id/status - Update order status
-app.put('/api/donhang/:id/status', async (req, res) => {
+app.put('/api/donhang/:id/status', requireAdmin, async (req, res) => {
+    const transaction = new sql.Transaction();
+    
     try {
         const { id } = req.params;
-        const { trang_thai } = req.body;
+        const { trang_thai, ghi_chu } = req.body;
         
-        console.log('🔄 API /api/donhang/:id/status called with:', { id, trang_thai });
+        // Lấy user ID từ session (người đang login)
+        const userId = req.session?.user?.id || null;
+        
+        console.log('🔄 API /api/donhang/:id/status called with:', { 
+            orderId: id, 
+            trang_thai, 
+            ghi_chu, 
+            userId,
+            userName: req.session?.user?.ho_ten 
+        });
 
         // Validate status
         const validStatuses = ['cho_xac_nhan', 'dang_xu_ly', 'dang_giao', 'hoan_thanh', 'huy'];
@@ -8634,8 +8646,35 @@ app.put('/api/donhang/:id/status', async (req, res) => {
             });
         }
 
-        const pool = await sql.connect(sqlConfig);
-        await pool.request()
+        // Get current status before updating
+        const checkRequest = new sql.Request();
+        const currentOrder = await checkRequest
+            .input('id', sql.UniqueIdentifier, id)
+            .query('SELECT trang_thai FROM orders WHERE id = @id');
+        
+        if (currentOrder.recordset.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Không tìm thấy đơn hàng' 
+            });
+        }
+
+        const trang_thai_cu = currentOrder.recordset[0].trang_thai;
+        
+        // If status hasn't changed, no need to update
+        if (trang_thai_cu === trang_thai) {
+            return res.json({ 
+                success: true, 
+                message: 'Trạng thái không thay đổi' 
+            });
+        }
+
+        // Start transaction
+        await transaction.begin();
+
+        // Update order status
+        const updateRequest = new sql.Request(transaction);
+        await updateRequest
             .input('id', sql.UniqueIdentifier, id)
             .input('trang_thai', sql.NVarChar(20), trang_thai)
             .input('ngay_cap_nhat', sql.DateTime2, new Date())
@@ -8646,16 +8685,54 @@ app.put('/api/donhang/:id/status', async (req, res) => {
                 WHERE id = @id
             `);
 
+        // Insert into order_status_history
+        const historyRequest = new sql.Request(transaction);
+        await historyRequest
+            .input('don_hang_id', sql.UniqueIdentifier, id)
+            .input('trang_thai_cu', sql.NVarChar(20), trang_thai_cu)
+            .input('trang_thai_moi', sql.NVarChar(20), trang_thai)
+            .input('ghi_chu', sql.NVarChar(500), ghi_chu || null)
+            .input('nguoi_thao_tac', sql.UniqueIdentifier, userId)
+            .query(`
+                INSERT INTO order_status_history (
+                    don_hang_id, trang_thai_cu, trang_thai_moi, 
+                    ghi_chu, nguoi_thao_tac, ngay_tao
+                )
+                VALUES (
+                    @don_hang_id, @trang_thai_cu, @trang_thai_moi,
+                    @ghi_chu, @nguoi_thao_tac, GETDATE()
+                )
+            `);
+
+        // Commit transaction
+        await transaction.commit();
+
+        console.log('✅ Order status updated:', {
+            orderId: id,
+            oldStatus: trang_thai_cu,
+            newStatus: trang_thai,
+            user: userId
+        });
+
         res.json({ 
             success: true, 
-            message: 'Cập nhật trạng thái thành công' 
+            message: 'Cập nhật trạng thái thành công',
+            data: {
+                trang_thai_cu,
+                trang_thai_moi: trang_thai
+            }
         });
         
     } catch (error) {
+        // Rollback on error
+        if (transaction._acquiredConnection) {
+            await transaction.rollback();
+        }
+        
         console.error('Order Status Update Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Lỗi khi cập nhật trạng thái đơn hàng' 
+            message: 'Lỗi khi cập nhật trạng thái đơn hàng: ' + error.message
         });
     }
 });

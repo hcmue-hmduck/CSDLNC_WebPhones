@@ -570,7 +570,7 @@ CREATE TABLE order_status_history (
     trang_thai_cu NVARCHAR(20),
     trang_thai_moi NVARCHAR(20) NOT NULL,
     ghi_chu NVARCHAR(500),
-    nguoi_thao_tac UNIQUEIDENTIFIER NULL,
+    nguoi_thao_tac UNIQUEIDENTIFIER NOT NULL,
     ngay_tao DATETIME2 DEFAULT GETDATE(),
     FOREIGN KEY (don_hang_id) REFERENCES orders(id),
     FOREIGN KEY (nguoi_thao_tac) REFERENCES users(id)

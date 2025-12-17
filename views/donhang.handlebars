@@ -233,7 +233,8 @@
                                         <option value="hoan_thanh">Hoàn thành</option>
                                         <option value="huy">Hủy</option>
                                     </select>
-                                    <button class="btn btn-primary btn-sm" id="updateStatusBtn">
+                                    <textarea class="form-control mt-2" id="orderStatusNote" rows="2" placeholder="Ghi chú thay đổi trạng thái (tùy chọn)"></textarea>
+                                    <button class="btn btn-primary btn-sm mt-2" id="updateStatusBtn">
                                         <i class="fas fa-save"></i> Cập nhật
                                     </button>
                                 </div>
@@ -606,7 +607,10 @@ class OrderManager {
             const response = await fetch(`/api/donhang/${orderId}/status`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ trang_thai: newStatus })
+                body: JSON.stringify({ 
+                    trang_thai: newStatus,
+                    ghi_chu: `Cập nhật từ danh sách đơn hàng`
+                })
             });
 
             const data = await response.json();
@@ -627,12 +631,16 @@ class OrderManager {
         if (!this.currentOrderId) return;
 
         const newStatus = document.getElementById('orderStatusSelect').value;
+        const ghiChu = document.getElementById('orderStatusNote')?.value || '';
         
         try {
             const response = await fetch(`/api/donhang/${this.currentOrderId}/status`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ trang_thai: newStatus })
+                body: JSON.stringify({ 
+                    trang_thai: newStatus,
+                    ghi_chu: ghiChu || `Cập nhật từ chi tiết đơn hàng`
+                })
             });
 
             const data = await response.json();
@@ -1833,11 +1841,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     .status-update {
         display: flex;
+        flex-direction: column;
         gap: 10px;
     }
 
     .status-update .form-select {
-        flex: 1;
+        width: 100%;
+    }
+
+    .status-update textarea {
+        width: 100%;
+        resize: vertical;
+        min-height: 60px;
+    }
+
+    .status-update .btn {
+        width: 100%;
     }
 
     .order-items-section {
