@@ -1499,14 +1499,13 @@
         }
         // Tạo document MongoDB mới
         // Trong ProductAPIService, sửa hàm createProductMongoDetail
-        static async createProductMongoDetail(sql_product_id, specsData, mo_ta_chi_tiet, slug, hinh_anh, link_avatar = '', videos = [], variants = [], video_links = [], trang_thai = 1, san_pham_noi_bat = false, thong_tin_khac = {}) {
+        static async createProductMongoDetail(sql_product_id, specsData, mo_ta_chi_tiet, slug, link_avatar = '', videos = [], variants = [], video_links = [], trang_thai = 1, san_pham_noi_bat = false, thong_tin_khac = {}) {
             try {
                 console.log('📤 Creating MongoDB document with raw data:', {
                     sql_product_id,
                     specsData,
                     mo_ta_chi_tiet,
                     slug,
-                    hinh_anh,
                     link_avatar,
                     videos,
                     variants,
@@ -1515,10 +1514,10 @@
                 });
 
                 // Tạo object với tất cả data
+                // ⚠️ KHÔNG có hinh_anh root level - ảnh nằm trong variants[region].hinh_anh
                 const rawData = {
                     sql_product_id: sql_product_id,
                     thong_so_ky_thuat: specsData,
-                    hinh_anh: hinh_anh,
                     videos: videos,
                     variants: variants,
                     video_links: video_links,
@@ -2419,17 +2418,30 @@
                             window.productSpecsManager.loadSpecsData(mongoData.thong_so_ky_thuat);
                         }
 
-                        // 🟢 LOAD ẢNH HIỆN CÓ TỪ MONGODB
-                        if (mongoData.hinh_anh && mongoData.hinh_anh.length > 0) {
-                            console.log('🖼️ Loading existing images from MongoDB with avatar:', {
-                                hinh_anh: mongoData.hinh_anh,
-                                anh_dai_dien: mongoData.anh_dai_dien
-                            });
-                            if (window.simpleImageUploadManager) {
-                                window.simpleImageUploadManager.loadExistingImages({
-                                    hinh_anh: mongoData.hinh_anh,
-                                    anh_dai_dien: mongoData.anh_dai_dien
+                        // 🟢 LOAD ẢNH HIỆN CÓ TỪ MONGODB (từ variants[region].hinh_anh)
+                        // ⭐ Chỉ load ảnh của region đang active
+                        if (mongoData.variants && typeof mongoData.variants === 'object') {
+                            // Lấy region đang active từ ProductVariantsManager
+                            const activeRegion = window.productVariantsManager?.activeRegion || 'bac';
+                            const regionData = mongoData.variants[activeRegion];
+                            
+                            if (regionData?.hinh_anh && Array.isArray(regionData.hinh_anh) && regionData.hinh_anh.length > 0) {
+                                // 🎲 Random ảnh chính từ danh sách ảnh
+                                const randomIndex = Math.floor(Math.random() * regionData.hinh_anh.length);
+                                const randomMainImage = regionData.hinh_anh[randomIndex];
+                                
+                                console.log(`🖼️ Loading existing images from region "${activeRegion}":`, {
+                                    hinh_anh: regionData.hinh_anh,
+                                    anh_dai_dien: randomMainImage
                                 });
+                                if (window.simpleImageUploadManager) {
+                                    window.simpleImageUploadManager.loadExistingImages({
+                                        hinh_anh: regionData.hinh_anh,
+                                        anh_dai_dien: randomMainImage
+                                    });
+                                }
+                            } else {
+                                console.log(`📸 Region "${activeRegion}": No images to load`);
                             }
                         }
 
@@ -2588,8 +2600,8 @@
                                 }
                             });
                             
-                            // Re-render preview (giữ nguyên mainImageIndex = 0)
-                            if (currentImageUrls.length > window.simpleImageUploadManager.productImages.length - (currentImageUrls.length - mongoData.hinh_anh?.length || 0)) {
+                            // Re-render preview
+                            if (currentImageUrls.length > 0) {
                                 window.simpleImageUploadManager.renderProductImagesPreview();
                                 console.log('✅ Re-rendered preview with variant images, mainImageIndex unchanged');
                             }
@@ -3065,8 +3077,8 @@
                         mo_ta_chi_tiet: document.getElementById('productDescription')?.value.trim() || '',
                         trang_thai: parseInt(document.getElementById('productStatus')?.value || 1),
                         san_pham_noi_bat: document.getElementById('productFeatured')?.checked || false,
-                        slug: Utils.generateSlug(productData.ten_san_pham),
-                        hinh_anh: variantImages  // Thêm ảnh variants vào hinh_anh array
+                        slug: Utils.generateSlug(productData.ten_san_pham)
+                        // ⚠️ KHÔNG có hinh_anh root level - ảnh nằm trong variants[region].hinh_anh
                     };
                     
                     // Thêm variants data - variantsManagerData ĐÃ grouped by site_origin từ getVariantsData()
@@ -3200,10 +3212,9 @@
                             specsData,
                             mongoUpdateData.mo_ta_chi_tiet,
                             mongoUpdateData.slug,
-                            [],  // hinh_anh - empty for now
                             '',  // link_avatar - empty for now
                             [],  // videos - empty for now
-                            variantsByRegionForCreate,  // Variants grouped by region
+                            variantsByRegionForCreate,  // Variants grouped by region (with hinh_anh inside)
                             videoLinksData,
                             mongoUpdateData.trang_thai,
                             mongoUpdateData.san_pham_noi_bat,
@@ -3393,95 +3404,54 @@
                     // BƯỚC 5: Cập nhật SQL với links ảnh/video
                     console.log('📝 Step 5: Updating SQL with media links...');
                     
-                    // 🔄 UPDATE MongoDB với hinh_anh array (bao gồm cả product images)
-                    // Lấy array hiện tại, loại bỏ ảnh đã xoá, merge với ảnh mới
+                    // 🔄 UPDATE MongoDB - KHÔNG dùng root hinh_anh nữa
+                    // Ảnh sẽ được lưu vào variants[region].hinh_anh thông qua updatedVariantsData
                     if (mongoDetailId) {
                         try {
-                            // Lấy hinh_anh hiện tại từ MongoDB
-                            const mongoDoc = await ProductAPIService.getProductMongoDetail(productId);
-                            const currentImages = (mongoDoc.success && mongoDoc.data?.hinh_anh) ? mongoDoc.data.hinh_anh : [];
-                            
-                            // Filter bỏ các ảnh đã đánh dấu xoá
-                            const imagesToDeleteSet = new Set(window.simpleImageUploadManager.imagesToDelete || []);
-                            const filteredCurrentImages = currentImages.filter(img => !imagesToDeleteSet.has(img));
-                            
-                            console.log(`📸 Current images: ${currentImages.length}, After filtering deleted: ${filteredCurrentImages.length}`);
-                            
-                            // Merge với ảnh mới (loại duplicate)
-                            const finalImages = [...filteredCurrentImages];
-                            validHinhAnh.forEach(img => {
-                                if (img && !finalImages.includes(img)) {
-                                    finalImages.push(img);
-                                }
-                            });
-                            
-                            console.log(`📸 Final images array (before swap): ${finalImages.length} images`);
-                            console.log('Images:', finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
-                            
-                            // 🎯 Lấy URL của ảnh chính từ productImages[mainImageIndex]
-                            // ⚠️ QUAN TRỌNG: Lấy SAU KHI upload để có URL mới
-                            const mainImageIndex = window.simpleImageUploadManager?.mainImageIndex || 0;
-                            const selectedMainImage = window.simpleImageUploadManager?.productImages[mainImageIndex];
-                            
-                            // selectedMainImage có thể là { url, isExisting } hoặc File object
-                            let mainImageUrl = null;
-                            if (selectedMainImage) {
-                                if (selectedMainImage.url) {
-                                    mainImageUrl = selectedMainImage.url; // Đã có URL sau upload
-                                } else if (selectedMainImage instanceof File) {
-                                    // Nếu vẫn là File sau upload → tìm trong validHinhAnh theo index
-                                    console.warn('⚠️ Main image still File object after upload, finding in validHinhAnh');
-                                    mainImageUrl = validHinhAnh[mainImageIndex] || null;
-                                }
-                            }
-                            
-                            console.log(`🎯 Main image index: ${mainImageIndex}, URL:`, mainImageUrl?.substring(0, 60));
-                            
+                            // 🎲 Chọn ảnh đại diện RANDOM từ bất kỳ region nào có ảnh
                             let anhDaiDien = null;
                             
-                            if (mainImageUrl) {
-                                // Tìm index của ảnh chính trong finalImages
-                                const mainIdx = finalImages.findIndex(img => img === mainImageUrl);
-                                console.log(`🔍 Found main image at index: ${mainIdx}`);
-                                
-                                if (mainIdx === -1) {
-                                    // Nếu không tìm thấy trong finalImages → add vào đầu
-                                    console.warn('⚠️ Main image not found in finalImages, adding to front');
-                                    finalImages.unshift(mainImageUrl);
-                                } else if (mainIdx > 0) {
-                                    // Swap ảnh chính lên index 0
-                                    const temp = finalImages[0];
-                                    finalImages[0] = finalImages[mainIdx];
-                                    finalImages[mainIdx] = temp;
-                                    console.log(`🔄 Swapped index 0 ↔ index ${mainIdx}`);
-                                    console.log('Images after swap:', finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+                            // Thu thập tất cả ảnh từ các regions
+                            const allRegionImages = [];
+                            if (updatedVariantsData && typeof updatedVariantsData === 'object') {
+                                for (const region of Object.keys(updatedVariantsData)) {
+                                    if (updatedVariantsData[region]?.hinh_anh?.length > 0) {
+                                        allRegionImages.push(...updatedVariantsData[region].hinh_anh);
+                                    }
                                 }
-                                
-                                anhDaiDien = mainImageUrl;
-                            } else {
-                                // Không có mainImageUrl, dùng ảnh đầu tiên
-                                anhDaiDien = finalImages.length > 0 ? finalImages[0] : null;
-                                console.log('⚠️ No mainImageUrl found, using first image as main');
                             }
                             
-                            // Update MongoDB với array cuối cùng, ảnh đại diện và videos
+                            // Chọn random từ các ảnh có sẵn
+                            if (allRegionImages.length > 0) {
+                                const randomIndex = Math.floor(Math.random() * allRegionImages.length);
+                                anhDaiDien = allRegionImages[randomIndex];
+                                console.log(`🎲 Randomly selected main image (${randomIndex + 1}/${allRegionImages.length}):`, anhDaiDien?.substring(0, 60));
+                            } else if (validHinhAnh.length > 0) {
+                                // Fallback: nếu không có ảnh trong variants, dùng product images
+                                const randomIndex = Math.floor(Math.random() * validHinhAnh.length);
+                                anhDaiDien = validHinhAnh[randomIndex];
+                                console.log(`🎲 No variant images, randomly selected from product images (${randomIndex + 1}/${validHinhAnh.length}):`, anhDaiDien?.substring(0, 60));
+                            }
+                            
+                            // ⚠️ Update MongoDB chỉ với anh_dai_dien và videos
+                            // hinh_anh đã được xử lý trong variants[region].hinh_anh rồi
                             const updateResult = await ProductAPIService.updateProductMongoDetail(mongoDetailId, {
-                                hinh_anh: finalImages,
                                 anh_dai_dien: anhDaiDien,
-                                videos: videoUrls || []
+                                videos: videoUrls || [],
+                                variants: updatedVariantsData  // Variants đã có hinh_anh array riêng
                             });
                             console.log('✅ Updated MongoDB successfully');
                             console.log('📦 Data sent to MongoDB:', {
-                                hinh_anh: finalImages.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`),
                                 anh_dai_dien: anhDaiDien?.substring(0, 60) + '...',
-                                videos: videoUrls
+                                videos: videoUrls,
+                                variants_regions: Object.keys(updatedVariantsData || {})
                             });
                             console.log('📦 Update result:', updateResult);
                             
                             // Reset danh sách ảnh cần xoá sau khi đã xử lý xong
                             window.simpleImageUploadManager.imagesToDelete = [];
                         } catch (error) {
-                            console.error('❌ Error updating MongoDB hinh_anh:', error);
+                            console.error('❌ Error updating MongoDB:', error);
                         }
                     }
 
@@ -3668,10 +3638,9 @@
                         specsData,
                         mongoData.mo_ta_chi_tiet,
                         mongoData.slug,
-                        [],  // hinh_anh - empty for now
                         '',  // link_avatar - empty for now
                         [],  // videos - empty for now
-                        cleanedVariantsForCreateNew,  // Cleaned variants data
+                        cleanedVariantsForCreateNew,  // Cleaned variants data (with hinh_anh inside)
                         videoLinksData,
                         mongoData.trang_thai,
                         mongoData.san_pham_noi_bat,
@@ -3823,43 +3792,46 @@
                     // Update MongoDB với hinh_anh và anh_dai_dien
                     if (mongoDetailId) {
                         try {
-                            console.log(`📸 Valid images (before swap): ${validHinhAnh.length} images`);
-                            console.log('Images:', validHinhAnh.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+                            // 🔄 CREATE MongoDB - KHÔNG dùng root hinh_anh nữa
+                            // Ảnh sẽ được lưu vào variants[region].hinh_anh thông qua updatedVariantsData
                             
-                            // 🎯 Lấy URL của ảnh chính từ productImages[mainImageIndex] (CREATE mode)
-                            const mainImageIndex = window.simpleImageUploadManager?.mainImageIndex || 0;
-                            const selectedMainImage = window.simpleImageUploadManager?.productImages[mainImageIndex];
-                            const mainImageUrl = selectedMainImage?.url || null;
-                            console.log(`🎯 Main image index: ${mainImageIndex}, URL:`, mainImageUrl?.substring(0, 60));
-                            
+                            // 🎲 Chọn ảnh đại diện RANDOM từ bất kỳ region nào có ảnh
                             let anhDaiDien = null;
                             
-                            if (mainImageUrl) {
-                                // Tìm index của ảnh chính trong validHinhAnh
-                                const mainIdx = validHinhAnh.findIndex(img => img === mainImageUrl);
-                                console.log(`🔍 Found main image at index: ${mainIdx}`);
-                                
-                                if (mainIdx > 0) {
-                                    // Swap ảnh chính lên index 0
-                                    const temp = validHinhAnh[0];
-                                    validHinhAnh[0] = validHinhAnh[mainIdx];
-                                    validHinhAnh[mainIdx] = temp;
-                                    console.log(`🔄 Swapped index 0 ↔ index ${mainIdx}`);
-                                    console.log('Images after swap:', validHinhAnh.map((img, i) => `[${i}]: ${img.substring(0, 60)}...`));
+                            // Thu thập tất cả ảnh từ các regions
+                            const allRegionImages = [];
+                            if (updatedVariantsData && typeof updatedVariantsData === 'object') {
+                                for (const region of Object.keys(updatedVariantsData)) {
+                                    if (updatedVariantsData[region]?.hinh_anh?.length > 0) {
+                                        allRegionImages.push(...updatedVariantsData[region].hinh_anh);
+                                    }
                                 }
-                                
-                                anhDaiDien = mainImageUrl;
-                            } else {
-                                // Không có mainImageUrl, dùng ảnh đầu tiên
-                                anhDaiDien = validHinhAnh.length > 0 ? validHinhAnh[0] : null;
-                                console.log('⚠️ No mainImageUrl found, using first image as main');
                             }
+                            
+                            // Chọn random từ các ảnh có sẵn
+                            if (allRegionImages.length > 0) {
+                                const randomIndex = Math.floor(Math.random() * allRegionImages.length);
+                                anhDaiDien = allRegionImages[randomIndex];
+                                console.log(`🎲 Randomly selected main image (${randomIndex + 1}/${allRegionImages.length}):`, anhDaiDien?.substring(0, 60));
+                            } else if (validHinhAnh.length > 0) {
+                                // Fallback: nếu không có ảnh trong variants, dùng product images
+                                const randomIndex = Math.floor(Math.random() * validHinhAnh.length);
+                                anhDaiDien = validHinhAnh[randomIndex];
+                                console.log(`🎲 No variant images, randomly selected from product images (${randomIndex + 1}/${validHinhAnh.length}):`, anhDaiDien?.substring(0, 60));
+                            }
+                            
+                            // ⚠️ Update MongoDB chỉ với anh_dai_dien và videos
+                            // hinh_anh đã được xử lý trong variants[region].hinh_anh rồi
                             await ProductAPIService.updateProductMongoDetail(mongoDetailId, {
-                                hinh_anh: validHinhAnh,
                                 anh_dai_dien: anhDaiDien,
-                                videos: videoUrls || []
+                                videos: videoUrls || [],
+                                variants: updatedVariantsData  // Variants đã có hinh_anh array riêng
                             });
-                            console.log('✅ Updated MongoDB hinh_anh, anh_dai_dien and videos (CREATE mode):', { anhDaiDien, videos: videoUrls });
+                            console.log('✅ Updated MongoDB (CREATE mode):', { 
+                                anhDaiDien: anhDaiDien?.substring(0, 60) + '...', 
+                                videos: videoUrls,
+                                variants_regions: Object.keys(updatedVariantsData || {})
+                            });
                         } catch (error) {
                             console.error('❌ Error updating MongoDB hinh_anh:', error);
                         }
@@ -8109,10 +8081,10 @@ class SimpleImageUploadManager {
         }
     }
 
-    // Hàm xoá ảnh khỏi MongoDB
+    // Hàm xoá ảnh khỏi MongoDB (từ variants[region].hinh_anh)
     async deleteImageFromMongoDB(productId, imageUrl) {
         try {
-            console.log('🗑️ Removing image from MongoDB:', { productId, imageUrl });
+            console.log('🗑️ Removing image from MongoDB variants:', { productId, imageUrl });
             
             // Lấy document hiện tại
             const mongoDoc = await ProductAPIService.getProductMongoDetail(productId);
@@ -8121,14 +8093,19 @@ class SimpleImageUploadManager {
             }
 
             const currentData = mongoDoc.data;
-            const currentImages = currentData.hinh_anh || [];
+            const variants = currentData.variants || {};
 
-            // Lọc bỏ ảnh cần xoá
-            const updatedImages = currentImages.filter(img => img !== imageUrl);
+            // Xóa ảnh khỏi tất cả regions
+            Object.keys(variants).forEach(region => {
+                if (variants[region]?.hinh_anh) {
+                    variants[region].hinh_anh = variants[region].hinh_anh.filter(img => img !== imageUrl);
+                    console.log(`🗑️ Removed from region ${region}, remaining: ${variants[region].hinh_anh.length}`);
+                }
+            });
 
             // Cập nhật document MongoDB
             const updateData = {
-                hinh_anh: updatedImages,
+                variants: variants,
                 updatedAt: new Date()
             };
 
@@ -8681,15 +8658,6 @@ class SimpleImageUploadManager {
         return `
             <img src="${imageSrc}" alt="Preview ${index + 1}">
             <div class="image-preview-actions">
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="mainImage" 
-                        id="mainImage${index}" 
-                        ${index === this.mainImageIndex ? 'checked' : ''}
-                        onchange="window.simpleImageUploadManager.setMainImage(${index})">
-                    <label class="form-check-label" for="mainImage${index}">
-                        Ảnh chính
-                    </label>
-                </div>
                 <div class="action-buttons">
                     <button type="button" class="btn-view-image" 
                         onclick="window.simpleImageUploadManager.viewFullImage('${imageSrc}')"
@@ -9788,6 +9756,48 @@ class ProductVariantsManager {
     switchRegion(region) {
         this.activeRegion = region;
         console.log('🔄 Switched to region:', region);
+        
+        // ⭐ Load ảnh theo region từ MongoDB variants
+        this.loadRegionImages(region);
+    }
+    
+    // Load ảnh của region hiện tại từ MongoDB
+    async loadRegionImages(region) {
+        try {
+            const productId = document.getElementById('productId')?.value;
+            if (!productId) return;
+            
+            // Lấy MongoDB data
+            const mongoDoc = await ProductAPIService.getProductMongoDetail(productId);
+            if (!mongoDoc.success || !mongoDoc.data) return;
+            
+            const variants = mongoDoc.data.variants || {};
+            const regionData = variants[region];
+            
+            if (!regionData?.hinh_anh || regionData.hinh_anh.length === 0) {
+                console.log(`📸 Region "${region}": No images`);
+                // Clear preview nếu không có ảnh
+                if (window.simpleImageUploadManager) {
+                    window.simpleImageUploadManager.productImages = [];
+                    window.simpleImageUploadManager.renderProductImagesPreview();
+                }
+                return;
+            }
+            
+            console.log(`📸 Loading ${regionData.hinh_anh.length} images for region "${region}"`);
+            
+            // Load ảnh vào image upload manager
+            if (window.simpleImageUploadManager) {
+                // 🎲 Random ảnh chính từ danh sách ảnh
+                const randomIndex = Math.floor(Math.random() * regionData.hinh_anh.length);
+                window.simpleImageUploadManager.loadExistingImages({
+                    hinh_anh: regionData.hinh_anh,
+                    anh_dai_dien: regionData.hinh_anh[randomIndex] // Random ảnh làm main
+                });
+            }
+        } catch (error) {
+            console.error('❌ Error loading region images:', error);
+        }
     }
 
     addVariantType(region, name = '', values = []) {
@@ -10835,8 +10845,12 @@ class ProductVariantsManager {
             // Initialize region in output
             variantsByRegion[region] = {
                 variant_options: [],      // Will be filled later based on actual usage
-                variant_combinations: []   // Array of combos
+                variant_combinations: [], // Array of combos
+                hinh_anh: []              // ⭐ Array of all images for this region
             };
+            
+            // Track unique images for this region
+            const regionImagesSet = new Set();
             
             // Process combinations for this region
             regionData.combinations.forEach(c => {
@@ -10874,6 +10888,11 @@ class ProductVariantsManager {
                     active: c.active,
                     attributes: c.attributes
                 };
+                
+                // ⭐ Collect image URL for region's hinh_anh array
+                if (linkAnh && !linkAnh.startsWith('data:')) {
+                    regionImagesSet.add(linkAnh);
+                }
                 
                 variantsByRegion[region].variant_combinations.push(combo);
             });
@@ -10925,8 +10944,24 @@ class ProductVariantsManager {
             console.log(`✅ Region "${region}": Extracted ${variantOptions.length} variant options from ${combinations.length} combinations`);
         });
         
+        // ⭐ Populate hinh_anh arrays from collected images
+        Object.keys(variantsByRegion).forEach(region => {
+            if (variantsByRegion[region] === null) return;
+            
+            // Convert Set to Array for hinh_anh
+            const regionImagesSet = new Set();
+            variantsByRegion[region].variant_combinations.forEach(combo => {
+                if (combo.link_anh && !combo.link_anh.startsWith('data:')) {
+                    regionImagesSet.add(combo.link_anh);
+                }
+            });
+            
+            variantsByRegion[region].hinh_anh = Array.from(regionImagesSet);
+            console.log(`📸 Region "${region}": Collected ${variantsByRegion[region].hinh_anh.length} unique images`);
+        });
+        
         console.log('✅ Returning OBJECT grouped by site_origin keys:', Object.keys(variantsByRegion));
-        console.log('📊 Structure: { site_origin: { variant_options: [...], variant_combinations: [...] } }');
+        console.log('📊 Structure: { site_origin: { variant_options: [...], variant_combinations: [...], hinh_anh: [...] } }');
         
         return variantsByRegion;  // Returns OBJECT, not array!
     }
