@@ -10962,60 +10962,14 @@ app.post('/api/orders', async (req, res) => {
                 const site_kho_giao_hang = siteWarehouseResult.recordset[0].warehouse_id;
                 console.log(`📦 Kho giao hàng cho site ${siteOrigin}:`, siteWarehouseResult.recordset[0]);
                 
-                // ✅ 2. Query phí vận chuyển cho site này
-                // First get shipping_method_id from the provided shipping_method_region_id
-                const originalShippingRequest = new sql.Request(transaction);
-                const originalShippingResult = await originalShippingRequest
-                    .input('shipping_method_region_id', sql.UniqueIdentifier, shipping_method_region_id)
-                    .query(`
-                        SELECT shipping_method_id 
-                        FROM shipping_method_regions
-                        WHERE id = @shipping_method_region_id
-                    `);
+                // ✅ 2. Phí vận chuyển: chia đều giá ship mà user đã chọn
+                // Không query lại giá ship của từng vùng, chỉ dùng shipping_method_region_id ban đầu
+                const site_shipping_method_region_id = shipping_method_region_id;
+                const site_phi_van_chuyen_base = is_split_order 
+                    ? (phi_van_chuyen_khach / siteOrigins.length)
+                    : phi_van_chuyen_khach;
                 
-                let actual_shipping_method_id = null;
-                if (originalShippingResult.recordset.length > 0) {
-                    actual_shipping_method_id = originalShippingResult.recordset[0].shipping_method_id;
-                }
-                
-                // Now query shipping for this site's region
-                let site_shipping_method_region_id = shipping_method_region_id;
-                let site_phi_van_chuyen_base = 0;
-                
-                if (actual_shipping_method_id) {
-                    const siteShippingRequest = new sql.Request(transaction);
-                    const siteShippingResult = await siteShippingRequest
-                        .input('shipping_method_id', sql.UniqueIdentifier, actual_shipping_method_id)
-                        .input('site_origin', sql.NVarChar(10), siteOrigin)
-                        .query(`
-                            SELECT TOP 1 
-                                smr.id as shipping_method_region_id,
-                                smr.chi_phi_van_chuyen,
-                                smr.thoi_gian_giao_du_kien
-                            FROM shipping_method_regions smr
-                            WHERE smr.shipping_method_id = @shipping_method_id
-                              AND smr.region_id = @site_origin
-                              AND smr.trang_thai = 1
-                        `);
-                    
-                    if (siteShippingResult.recordset.length > 0) {
-                        site_shipping_method_region_id = siteShippingResult.recordset[0].shipping_method_region_id;
-                        site_phi_van_chuyen_base = parseFloat(siteShippingResult.recordset[0].chi_phi_van_chuyen) || 0;
-                        console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base);
-                    } else {
-                        // No shipping method for this region, fallback
-                        site_phi_van_chuyen_base = is_split_order 
-                            ? (phi_van_chuyen_khach / siteOrigins.length)
-                            : phi_van_chuyen_khach;
-                        console.log(`⚠️ Không tìm thấy phí ship cho site ${siteOrigin}, dùng fallback:`, site_phi_van_chuyen_base);
-                    }
-                } else {
-                    // Fallback: phân bổ theo tỉ lệ từ phi_van_chuyen_khach
-                    site_phi_van_chuyen_base = is_split_order 
-                        ? (phi_van_chuyen_khach / siteOrigins.length)
-                        : phi_van_chuyen_khach;
-                    console.log(`⚠️ Không tìm thấy shipping method, dùng fallback:`, site_phi_van_chuyen_base);
-                }
+                console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base, `(chia từ ${phi_van_chuyen_khach})`);
                 
                 // Calculate totals for this site's items
                 const site_tong_tien_hang = siteItems.reduce((sum, item) => 
