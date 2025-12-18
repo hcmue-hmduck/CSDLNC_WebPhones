@@ -1261,6 +1261,7 @@ app.get('/api/cart', async (req, res) => {
                     pv.gia_ban as variant_price,
                     pv.so_luong_ton_kho as variant_stock,
                     pv.anh_dai_dien as variant_image,
+                    pv.site_origin,
                     p.ten_san_pham,
                     p.link_anh_dai_dien,
                     p.gia_niem_yet,
@@ -1396,6 +1397,7 @@ app.get('/api/cart', async (req, res) => {
                 variant_id: item.variant_id,
                 san_pham_id: item.variant_id, // Alias cho compatibility với frontend
                 product_id: item.product_id,
+                site_origin: item.site_origin,
                 so_luong: item.so_luong,
                 ngay_them: item.ngay_them,
                 ten_san_pham: productName,
@@ -10731,7 +10733,9 @@ app.post('/api/vouchers/validate', async (req, res) => {
                 ten_voucher: voucher.ten_voucher,
                 loai_giam_gia: voucher.loai_giam_gia,
                 gia_tri_giam: voucher.gia_tri_giam,
+                gia_tri_giam_toi_da: voucher.gia_tri_toi_da,
                 pham_vi: voucher.pham_vi,
+                vung_id: voucher.vung_id,
                 discountAmount: discountAmount,
                 isFreeShip: voucher.loai_giam_gia === 'mienphi'
             }
@@ -10952,6 +10956,57 @@ app.post('/api/orders', async (req, res) => {
             isSplitOrder: is_split_order
         });
 
+        // 🎫 Query voucher info BEFORE transaction (if voucher is used)
+        let voucherInfo = null;
+        if (voucher_id) {
+            try {
+                const voucherRequest = new sql.Request(db.connectionPools.default);
+                const voucherResult = await voucherRequest
+                    .input('voucher_id', sql.UniqueIdentifier, voucher_id)
+                    .query(`
+                        SELECT id, ma_voucher, ten_voucher, vung_id, loai_giam_gia
+                        FROM vouchers
+                        WHERE id = @voucher_id
+                    `);
+                
+                if (voucherResult.recordset.length > 0) {
+                    voucherInfo = voucherResult.recordset[0];
+                    console.log('🎫 Voucher info:', voucherInfo);
+                } else {
+                    console.log('⚠️ Voucher not found:', voucher_id);
+                }
+            } catch (voucherError) {
+                console.error('❌ Error querying voucher:', voucherError);
+            }
+        }
+
+        // 🚚 Query minimum shipping fee from all regions for split order calculation
+        let minShippingFee = phi_van_chuyen_khach;
+        if (is_split_order && shipping_method_region_id) {
+            try {
+                const shippingMethodRequest = new sql.Request(db.connectionPools.default);
+                const shippingMethodResult = await shippingMethodRequest
+                    .input('shipping_method_region_id', sql.UniqueIdentifier, shipping_method_region_id)
+                    .query(`
+                        SELECT TOP 1 gia_van_chuyen
+                        FROM shipping_method_regions
+                        WHERE shipping_method_id = (
+                            SELECT shipping_method_id 
+                            FROM shipping_method_regions 
+                            WHERE id = @shipping_method_region_id
+                        )
+                        ORDER BY gia_van_chuyen ASC
+                    `);
+                
+                if (shippingMethodResult.recordset.length > 0) {
+                    minShippingFee = shippingMethodResult.recordset[0].gia_van_chuyen;
+                    console.log('🚚 Minimum shipping fee found:', minShippingFee);
+                }
+            } catch (shippingError) {
+                console.error('⚠️ Error querying min shipping fee, using default:', shippingError);
+            }
+        }
+
         // Generate ma_don_hang (format: DH + timestamp + random) - CHUNG cho tất cả orders
         const ma_don_hang = 'DH' + Date.now() + Math.floor(Math.random() * 1000);
 
@@ -10989,24 +11044,30 @@ app.post('/api/orders', async (req, res) => {
                 const site_kho_giao_hang = siteWarehouseResult.recordset[0].warehouse_id;
                 console.log(`📦 Kho giao hàng cho site ${siteOrigin}:`, siteWarehouseResult.recordset[0]);
                 
-                // ✅ 2. Phí vận chuyển: chia đều giá ship mà user đã chọn
-                // Không query lại giá ship của từng vùng, chỉ dùng shipping_method_region_id ban đầu
+                // ✅ 2. Phí vận chuyển: Dùng giá nhỏ nhất / số lượng split orders
                 const site_shipping_method_region_id = shipping_method_region_id;
                 const site_phi_van_chuyen_base = is_split_order 
-                    ? (phi_van_chuyen_khach / siteOrigins.length)
+                    ? (minShippingFee / siteOrigins.length)
                     : phi_van_chuyen_khach;
                 
-                console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base, `(chia từ ${phi_van_chuyen_khach})`);
+                console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base, `(chia từ min: ${minShippingFee})`);
                 
                 // Calculate totals for this site's items
                 const site_tong_tien_hang = siteItems.reduce((sum, item) => 
                     sum + (parseFloat(item.don_gia) * parseInt(item.so_luong)), 0
                 );
                 
-                // Phân bổ voucher theo tỉ lệ (nếu split)
-                const site_gia_tri_giam = is_split_order && gia_tri_giam_voucher
-                    ? (gia_tri_giam_voucher * site_tong_tien_hang / tong_tien_hang)
-                    : (gia_tri_giam_voucher || 0);
+                // 🎫 Chỉ áp dụng voucher cho order có sản phẩm từ vùng matching với voucher
+                let site_gia_tri_giam = 0;
+                const canApplyVoucher = voucherInfo && voucherInfo.vung_id === siteOrigin;
+                
+                if (canApplyVoucher && gia_tri_giam_voucher) {
+                    // Áp dụng toàn bộ voucher cho order matching này
+                    site_gia_tri_giam = gia_tri_giam_voucher;
+                    console.log(`✅ Voucher áp dụng cho site ${siteOrigin} (matching vùng ${voucherInfo.vung_id}):`, site_gia_tri_giam);
+                } else if (voucherInfo) {
+                    console.log(`⏭️ Skip voucher cho site ${siteOrigin} (voucher từ vùng ${voucherInfo.vung_id})`);
+                }
                 
                 // Calculate chi_phi_noi_bo if cross-region fulfillment
                 const hasCrossRegion = siteItems.some(
@@ -11034,6 +11095,9 @@ app.post('/api/orders', async (req, res) => {
                 // Generate UNIQUEIDENTIFIER for order ID (since orders.id is UNIQUEIDENTIFIER, not IDENTITY)
                 const orderId = uuidv4();
                 
+                // 🎫 Chỉ order matching với vùng voucher mới được gán voucher_id
+                const order_voucher_id = canApplyVoucher ? voucher_id : null;
+                
                 const orderRequest = new sql.Request(transaction);
                 await orderRequest
                     .input('id', sql.UniqueIdentifier, orderId) // ✅ Provide ID explicitly
@@ -11044,7 +11108,7 @@ app.post('/api/orders', async (req, res) => {
                     .input('shipping_method_region_id', sql.UniqueIdentifier, site_shipping_method_region_id) // ✅ Site-specific
                     .input('dia_chi_giao_hang_id', sql.UniqueIdentifier, addressId)
                     .input('kho_giao_hang', sql.UniqueIdentifier, site_kho_giao_hang) // ✅ Site-specific warehouse
-                    .input('voucher_id', sql.UniqueIdentifier, voucher_id || null)
+                    .input('voucher_id', sql.UniqueIdentifier, order_voucher_id) // ✅ CHỈ matching order có voucher_id
                     .input('payment_method', sql.NVarChar(50), payment_method || 'cod')
                     .input('ghi_chu_order', sql.NVarChar(sql.MAX), ghi_chu_order || null)
                     .input('tong_tien_hang', sql.Decimal(15, 2), site_tong_tien_hang)
@@ -11073,7 +11137,9 @@ app.post('/api/orders', async (req, res) => {
                 createdOrders.push({
                     orderId,
                     siteOrigin,
-                    items: siteItems
+                    items: siteItems,
+                    hasVoucher: canApplyVoucher, // 🎫 Track if this order uses voucher
+                    voucherDiscount: site_gia_tri_giam
                 });
 
                 console.log(`Step 3: Creating order details for order ${orderId}...`);
@@ -11320,10 +11386,14 @@ app.post('/api/orders', async (req, res) => {
                 }
             }
 
-            // 8. Update voucher usage (chỉ cần update 1 lần cho tất cả orders)
-            if (voucher_id) {
-                console.log('🎫 Updating voucher usage:', voucher_id);
+            // 8. Update voucher usage - CHỈ cho order có hasVoucher = true
+            // Tìm order có voucher
+            const ordersWithVoucher = createdOrders.filter(o => o.hasVoucher && o.voucherDiscount > 0);
+            
+            if (voucher_id && ordersWithVoucher.length > 0 && voucherInfo) {
+                console.log(`🎫 Updating voucher usage: ${voucher_id} - ${ordersWithVoucher.length} order(s) use voucher`);
                 
+                // Update voucher count (chỉ 1 lần)
                 const voucherRequest = new sql.Request(transaction);
                 await voucherRequest
                     .input('voucher_id', sql.UniqueIdentifier, voucher_id)
@@ -11333,14 +11403,14 @@ app.post('/api/orders', async (req, res) => {
                         WHERE id = @voucher_id
                     `);
 
-                // Add to used_vouchers for each order
-                for (const orderInfo of createdOrders) {
+                // Insert used_vouchers CHỈ cho order có hasVoucher = true
+                for (const orderInfo of ordersWithVoucher) {
                     const usageRequest = new sql.Request(transaction);
                     await usageRequest
                         .input('voucher_id', sql.UniqueIdentifier, voucher_id)
                         .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
                         .input('don_hang_id', sql.UniqueIdentifier, orderInfo.orderId)
-                        .input('gia_tri_giam', sql.Decimal(18, 2), gia_tri_giam_voucher || 0)
+                        .input('gia_tri_giam', sql.Decimal(18, 2), orderInfo.voucherDiscount)
                     .query(`
                             INSERT INTO used_vouchers (
                                 voucher_id, nguoi_dung_id, don_hang_id, gia_tri_giam, ngay_su_dung
@@ -11349,9 +11419,12 @@ app.post('/api/orders', async (req, res) => {
                                 @voucher_id, @nguoi_dung_id, @don_hang_id, @gia_tri_giam, GETDATE()
                             )
                         `);
+                    console.log(`✅ Voucher recorded for order ${orderInfo.orderId} (site: ${orderInfo.siteOrigin}, discount: ${orderInfo.voucherDiscount})`);
                 }
                 
-                console.log('✅ Voucher usage recorded for all orders');
+                console.log(`✅ Voucher usage recorded for ${ordersWithVoucher.length}/${createdOrders.length} orders`);
+            } else if (voucher_id && ordersWithVoucher.length === 0) {
+                console.log('⚠️ No order matches voucher region - voucher not applied');
             }
 
             // Commit transaction
@@ -11514,32 +11587,44 @@ app.get('/api/orders', async (req, res) => {
                             od.don_gia,
                             od.thanh_tien,
                             pv.ten_hien_thi as ten_bien_the,
-                            p.ten_san_pham
+                            pv.anh_dai_dien as hinh_anh,
+                            pv.site_origin,
+                            p.ten_san_pham,
+                            p.id as san_pham_id
                         FROM order_details od
                         LEFT JOIN product_variants pv ON od.variant_id = pv.id
                         LEFT JOIN products p ON pv.san_pham_id = p.id
                         WHERE od.don_hang_id = @orderId
                     `);
 
-                // Get product images from MongoDB
+                // Nếu không có ảnh từ SQL, tìm từ MongoDB
                 for (let item of itemsResult.recordset) {
-                    try {
-                        const productDetail = await DataModel.Mongo.ProductDetail.findOne({
-                            'variants.variant_combinations.variant_id': item.variant_id
-                        }).lean();
+                    if (!item.hinh_anh) {
+                        try {
+                            const productDetail = await DataModel.Mongo.ProductDetail.findOne({
+                                sql_product_id: item.san_pham_id
+                            }).lean();
 
-                        if (productDetail && productDetail.variants) {
-                            const variant = productDetail.variants.variant_combinations.find(
-                                v => v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
-                            );
-                            if (variant && variant.images && variant.images.length > 0) {
-                                item.hinh_anh = variant.images[0];
-                            } else if (productDetail.images && productDetail.images.length > 0) {
+                            if (productDetail && productDetail.variants && item.site_origin) {
+                                // Tìm trong variants của region cụ thể
+                                const regionVariants = productDetail.variants[item.site_origin];
+                                if (regionVariants && regionVariants.variant_combinations) {
+                                    const variant = regionVariants.variant_combinations.find(
+                                        v => v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
+                                    );
+                                    if (variant && variant.images && variant.images.length > 0) {
+                                        item.hinh_anh = variant.images[0];
+                                    }
+                                }
+                            }
+                            
+                            // Fallback: dùng ảnh chính của sản phẩm
+                            if (!item.hinh_anh && productDetail && productDetail.images && productDetail.images.length > 0) {
                                 item.hinh_anh = productDetail.images[0];
                             }
+                        } catch (err) {
+                            console.error('Error fetching image from MongoDB:', err);
                         }
-                    } catch (err) {
-                        console.error('Error fetching image:', err);
                     }
                 }
 
@@ -11695,7 +11780,10 @@ app.get('/api/orders/:orderId', async (req, res) => {
                     SELECT 
                         pv.ten_hien_thi,
                         pv.ma_sku,
-                        p.ten_san_pham
+                        pv.anh_dai_dien,
+                        pv.site_origin,
+                        p.ten_san_pham,
+                        p.id as san_pham_id
                     FROM product_variants pv
                     LEFT JOIN products p ON pv.san_pham_id = p.id
                     WHERE pv.id = @variantId
@@ -11704,32 +11792,46 @@ app.get('/api/orders/:orderId', async (req, res) => {
             let ten_san_pham = 'Sản phẩm';
             let ten_bien_the = '';
             let hinh_anh = '/image/placeholder.png';
+            let san_pham_id = null;
+            let site_origin = null;
 
             if (variantResult.recordset.length > 0) {
                 const variantData = variantResult.recordset[0];
                 ten_san_pham = variantData.ten_san_pham || 'Sản phẩm';
                 ten_bien_the = variantData.ten_hien_thi || '';
+                hinh_anh = variantData.anh_dai_dien || hinh_anh; // ✅ Lấy ảnh từ SQL trước
+                san_pham_id = variantData.san_pham_id;
+                site_origin = variantData.site_origin;
             }
 
-            // Get image from MongoDB
-            try {
-                const productDetail = await DataModel.Mongo.ProductDetail.findOne({
-                    'variants.variant_combinations.variant_id': item.variant_id
-                }).lean();
+            // Nếu không có ảnh từ SQL, tìm từ MongoDB
+            if (!hinh_anh || hinh_anh === '/image/placeholder.png') {
+                try {
+                    const productDetail = await DataModel.Mongo.ProductDetail.findOne({
+                        sql_product_id: san_pham_id
+                    }).lean();
 
-                if (productDetail) {
-                    const variant = productDetail.variants?.variant_combinations?.find(v => 
-                        v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
-                    );
+                    if (productDetail && productDetail.variants && site_origin) {
+                        // Tìm trong variants của region cụ thể
+                        const regionVariants = productDetail.variants[site_origin];
+                        if (regionVariants && regionVariants.variant_combinations) {
+                            const variant = regionVariants.variant_combinations.find(v => 
+                                v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
+                            );
+                            
+                            if (variant && variant.images && variant.images.length > 0) {
+                                hinh_anh = variant.images[0];
+                            }
+                        }
+                    }
                     
-                    if (variant && variant.images && variant.images.length > 0) {
-                        hinh_anh = variant.images[0];
-                    } else if (productDetail.images && productDetail.images.length > 0) {
+                    // Fallback: dùng ảnh chính của sản phẩm
+                    if ((!hinh_anh || hinh_anh === '/image/placeholder.png') && productDetail && productDetail.images && productDetail.images.length > 0) {
                         hinh_anh = productDetail.images[0];
                     }
+                } catch (mongoErr) {
+                    console.error('MongoDB image fetch error:', mongoErr);
                 }
-            } catch (mongoErr) {
-                console.error('MongoDB image fetch error:', mongoErr);
             }
 
             return {
@@ -12200,7 +12302,7 @@ app.get('/api/shipping-methods/:id/regions', async (req, res) => {
 });
 
 // Get all shipping method regions
-app.get('/api/shipping-method-regions', injectPoolForAdmin, async (req, res) => {
+app.get('/api/shipping-method-regions', async (req, res) => {
     try {
         const { regionId, methodId } = req.query;
         
@@ -12222,7 +12324,8 @@ app.get('/api/shipping-method-regions', injectPoolForAdmin, async (req, res) => 
             WHERE 1=1
         `;
         
-        const request = new sql.Request(req.dbPool);
+        // ✅ User pages MUST use default pool (global data)
+        const request = new sql.Request(db.connectionPools.default);
         
         if (regionId) {
             query += ` AND smr.region_id = @regionId`;

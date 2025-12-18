@@ -2168,7 +2168,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         const cartItems = orderItems.map(item => ({
           san_pham_id: item.san_pham_id,
           gia_ban: item.gia_ban,
-          so_luong: item.so_luong
+          so_luong: item.so_luong,
+          site_origin: item.site_origin
         }));
 
         const response = await fetch('/api/vouchers/validate', {
@@ -2184,13 +2185,55 @@ document.addEventListener('DOMContentLoaded', async function() {
         const result = await response.json();
         
         if (result.success) {
-          appliedVoucher = result.voucher;
-          Utils.showToast('Áp dụng voucher thành công', 'success');
+          const voucher = result.voucher;
+          
+          // ✅ Kiểm tra vùng voucher với site_origin của từng product
+          const matchingItems = orderItems.filter(item => 
+            item.site_origin === voucher.vung_id
+          );
+          
+          if (matchingItems.length === 0) {
+            Utils.showToast(`Voucher chỉ áp dụng cho sản phẩm từ vùng ${voucher.vung_id}. Không có sản phẩm nào phù hợp.`, 'error');
+            return;
+          }
+          
+          // Tính giá trị discount chỉ cho các items matching
+          let matchingSubtotal = 0;
+          matchingItems.forEach(item => {
+            matchingSubtotal += item.gia_ban * item.so_luong;
+          });
+          
+          let discountAmount = 0;
+          let isFreeShip = false;
+          
+          if (voucher.loai_giam_gia === 'mienphi') {
+            isFreeShip = true;
+          } else if (voucher.loai_giam_gia === 'phantram') {
+            discountAmount = matchingSubtotal * (voucher.gia_tri_giam / 100);
+            if (voucher.gia_tri_giam_toi_da) {
+              discountAmount = Math.min(discountAmount, voucher.gia_tri_giam_toi_da);
+            }
+          } else if (voucher.loai_giam_gia === 'tiengiam') {
+            discountAmount = voucher.gia_tri_giam;
+          }
+          
+          appliedVoucher = {
+            ...voucher,
+            discountAmount,
+            isFreeShip,
+            matchingItemCount: matchingItems.length
+          };
+          
+          const itemCountText = matchingItems.length === orderItems.length 
+            ? 'tất cả sản phẩm'
+            : `${matchingItems.length}/${orderItems.length} sản phẩm`;
+          
+          Utils.showToast(`Áp dụng voucher thành công cho ${itemCountText}`, 'success');
           
           const appliedDiv = document.getElementById('appliedVoucher');
           appliedDiv.innerHTML = `
             <i class="fas fa-check-circle"></i> 
-            Đã áp dụng: ${result.voucher.ten_voucher}
+            Đã áp dụng: ${voucher.ten_voucher} (${itemCountText})
           `;
           appliedDiv.style.display = 'block';
           
