@@ -9080,7 +9080,7 @@ app.put('/api/inventory/:id', async (req, res) => {
 });
 
 // PUT /api/inventory/:id/adjust - Adjust stock quantity
-app.put('/api/inventory/:id/adjust', async (req, res) => {
+app.put('/api/inventory/:id/adjust', injectPoolForAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { type, quantity, note } = req.body;
@@ -9094,7 +9094,7 @@ app.put('/api/inventory/:id/adjust', async (req, res) => {
             });
         }
 
-        const existingInventory = await DataModel.SQL.Inventory.findById(id);
+        const existingInventory = await DataModel.SQL.Inventory.findById(id, req.dbPool);
         if (!existingInventory) {
             return res.status(404).json({ 
                 success: false, 
@@ -9130,7 +9130,90 @@ app.put('/api/inventory/:id/adjust', async (req, res) => {
         const updatedInventory = await DataModel.SQL.Inventory.update(id, {
             so_luong_kha_dung: newQuantity,
             lan_nhap_hang_cuoi: new Date()
-        });
+        }, req.dbPool);
+
+        // ✅ Cập nhật tổng số lượng tồn kho trong product_variants và MongoDB
+        const variantId = existingInventory.variant_id;
+        if (variantId) {
+            try {
+                const request = new sql.Request(req.dbPool);
+                const totalStockResult = await request
+                    .input('variant_id', sql.UniqueIdentifier, variantId)
+                    .query(`
+                        SELECT 
+                            SUM(i.so_luong_kha_dung) as tong_ton_kho,
+                            pv.san_pham_id,
+                            pv.site_origin
+                        FROM inventory i
+                        INNER JOIN product_variants pv ON i.variant_id = pv.id
+                        WHERE i.variant_id = @variant_id
+                        GROUP BY pv.san_pham_id, pv.site_origin
+                    `);
+                
+                const tongTonKho = totalStockResult.recordset[0]?.tong_ton_kho || 0;
+                const productId = totalStockResult.recordset[0]?.san_pham_id;
+                const siteOrigin = totalStockResult.recordset[0]?.site_origin;
+                
+                // Update product_variants (SQL)
+                const updateVariantRequest = new sql.Request(req.dbPool);
+                await updateVariantRequest
+                    .input('variant_id', sql.UniqueIdentifier, variantId)
+                    .input('so_luong_ton_kho', sql.Int, tongTonKho)
+                    .query(`
+                        UPDATE product_variants
+                        SET so_luong_ton_kho = @so_luong_ton_kho,
+                            ngay_cap_nhat = GETDATE()
+                        WHERE id = @variant_id
+                    `);
+                
+                console.log(`✅ Updated product_variants stock for variant ${variantId}: ${tongTonKho}`);
+
+                // ✅ Update MongoDB - variants[vung].variant_combinations
+                if (productId && siteOrigin) {
+                    try {
+                        const mongoProduct = await DataModel.Mongo.ProductDetail.findOne({
+                            sql_product_id: productId
+                        });
+
+                        if (mongoProduct && mongoProduct.variants && mongoProduct.variants[siteOrigin]) {
+                            const variantCombinations = mongoProduct.variants[siteOrigin].variant_combinations;
+                            
+                            if (variantCombinations && Array.isArray(variantCombinations)) {
+                                // Tìm index của variant cần update
+                                const variantIndex = variantCombinations.findIndex(
+                                    v => v.variant_id === variantId
+                                );
+
+                                if (variantIndex !== -1) {
+                                    // Chỉ update stock, không thay đổi gì khác
+                                    await DataModel.Mongo.ProductDetail.updateOne(
+                                        { 
+                                            sql_product_id: productId 
+                                        },
+                                        {
+                                            $set: {
+                                                [`variants.${siteOrigin}.variant_combinations.${variantIndex}.stock`]: tongTonKho
+                                            }
+                                        }
+                                    );
+                                    console.log(`✅ Updated MongoDB stock for variant ${variantId} in ${siteOrigin}: ${tongTonKho}`);
+                                } else {
+                                    console.warn(`⚠️ Variant ${variantId} not found in MongoDB variant_combinations`);
+                                }
+                            }
+                        } else {
+                            console.warn(`⚠️ Product ${productId} not found in MongoDB or missing variants[${siteOrigin}]`);
+                        }
+                    } catch (mongoError) {
+                        console.error('⚠️ Error updating MongoDB stock:', mongoError);
+                        // Không throw để không ảnh hưởng đến SQL update
+                    }
+                }
+            } catch (variantError) {
+                console.error('⚠️ Error updating product_variants stock:', variantError);
+                // Không throw error để không ảnh hưởng đến inventory adjustment
+            }
+        }
 
         console.log('✅ Stock adjusted:', id, 'New quantity:', newQuantity);
 

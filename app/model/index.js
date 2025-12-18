@@ -2513,9 +2513,10 @@ class SQLInventoryModel {
     }
   }
 
-  static async findById(id) {
+  static async findById(id, requestPool = null) {
     try {
-      const request = createRequest();
+      const pool = getPool(requestPool);
+      const request = createRequest(pool);
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -2850,9 +2851,10 @@ class SQLInventoryModel {
     }
   }
 
-  static async update(id, inventoryData) {
+  static async update(id, inventoryData, requestPool = null) {
     try {
-      const request = createRequest();
+      const pool = getPool(requestPool);
+      const request = createRequest(pool);
       
       let updateFields = [];
       

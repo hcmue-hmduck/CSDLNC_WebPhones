@@ -163,9 +163,6 @@
                         <button class="btn-secondary" onclick="exportWarehouse('{{this.id}}')">
                             <i class="fas fa-file-excel"></i> Xuất Excel
                         </button>
-                        <button class="btn-primary" onclick="addToWarehouse('{{this.id}}')">
-                            <i class="fas fa-plus"></i> Thêm sản phẩm
-                        </button>
                     </div>
                 </div>
 
@@ -232,9 +229,6 @@
             <div class="manage-warehouse">
                 <div class="manage-header">
                     <h3><i class="fas fa-cog"></i> Quản lý kho hàng</h3>
-                    <button class="btn-primary" onclick="openWarehouseModal()">
-                        <i class="fas fa-plus"></i> Thêm kho mới
-                    </button>
                 </div>
 
                 <div class="warehouse-list" id="warehouseList">
@@ -948,9 +942,6 @@ function renderWarehouseTable(warehouseId, searchTerm = '', filterLevel = '') {
                     <td class='text-center'>${inventory.so_luong_nhap_lai || 0}</td>
                     <td class='text-center'>${Utils.formatDate(inventory.lan_nhap_hang_cuoi)}</td>
                     <td class='text-center'>
-                        <button class='btn-sm btn-primary' onclick="event.stopPropagation(); editInventory('${inventory.id}');" title='Sửa'>
-                            <i class='fas fa-edit'></i>
-                        </button>
                         <button class='btn-sm btn-warning' onclick="event.stopPropagation(); adjustStock('${inventory.id}');" title='Điều chỉnh'>
                             <i class='fas fa-exchange-alt'></i>
                         </button>
@@ -1091,9 +1082,6 @@ function renderWarehouseManagement() {
                         : '<span class=\'badge bg-secondary\'>Không hoạt động</span>'}
                 </td>
                 <td class="text-center">
-                    <button class='btn-sm btn-primary' onclick="editWarehouse('${wh.id}')" title='Sửa'>
-                        <i class='fas fa-edit'></i>
-                    </button>
                     <button class='btn-sm btn-danger' onclick="deleteWarehouse('${wh.id}')" title='Xóa'>
                         <i class='fas fa-trash'></i>
                     </button>
@@ -1265,7 +1253,7 @@ async function saveAdjustment() {
     
     try {
         Utils.showLoading();
-        await API.post('/api/inventory/' + id + '/adjust', data);
+        await API.put('/api/inventory/' + id + '/adjust', data);
         Utils.showSuccess('Điều chỉnh thành công');
         bootstrap.Modal.getInstance(document.getElementById('adjustModal')).hide();
         loadData();
