@@ -5,6 +5,7 @@ import db from './server.js';
 import DataModel from './app/model/index.js';
 import sql from 'mssql';
 import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
 
 import mongoose, { mongo } from 'mongoose';
 
@@ -32,7 +33,12 @@ console.log('☁️ Cloudinary config:', {
 // Import SQL config từ server.js (tránh duplicate)
 const sqlConfig = db.dbConfig;
 
-db.connectAllDB();
+// ✅ Kết nối databases
+await db.connectAllDB();
+
+// ✅ Set global default pool cho DataModel (backward compatibility)
+sql.globalConnectionPool = db.connectionPools.default;
+
 const app = express();
 
 // Helper function to ensure all variants have variant_id
@@ -109,18 +115,51 @@ function requireAuth(req, res, next) {
 }
 
 // Admin authentication middleware (chỉ admin và super_admin)
-function requireAdmin(req, res, next) {
-    if (!req.session || !req.session.user) {
-        return res.redirect('/admin-login?redirect=' + encodeURIComponent(req.originalUrl));
+// ✅ Inject DB connection based on admin's vung_id
+const requireAdmin = [
+    async (req, res, next) => {
+        if (!req.session || !req.session.user) {
+            return res.redirect('/admin-login?redirect=' + encodeURIComponent(req.originalUrl));
+        }
+        
+        const userRole = req.session.user.vai_tro;
+        if (userRole !== 'admin' && userRole !== 'super_admin') {
+            return res.status(403).send('Access Denied: Chỉ admin mới có quyền truy cập');
+        }
+        
+        // ✅ Inject DB connection based on admin's region
+        try {
+            const vungId = req.session.user.vung_id;
+            req.dbPool = await db.getConnectionByRegion(vungId);
+            console.log(`✅ Admin DB pool injected for region: ${vungId}`);
+        } catch (err) {
+            console.error('❌ Error injecting admin DB connection:', err);
+            req.dbPool = db.connectionPools.default; // Fallback
+        }
+        
+        next();
     }
-    
-    const userRole = req.session.user.vai_tro;
-    if (userRole !== 'admin' && userRole !== 'super_admin') {
-        return res.status(403).send('Access Denied: Chỉ admin mới có quyền truy cập');
+];
+
+// Middleware để inject pool cho admin (cho API routes)
+// Nếu admin logged in → dùng pool theo vùng, không thì dùng default
+const injectPoolForAdmin = async (req, res, next) => {
+    try {
+        if (req.session?.user?.vung_id && 
+            (req.session.user.vai_tro === 'admin' || req.session.user.vai_tro === 'super_admin')) {
+            req.dbPool = await db.getConnectionByRegion(req.session.user.vung_id);
+            console.log(`✅ Admin API call - Using pool for region: ${req.session.user.vung_id}`);
+        } else {
+            req.dbPool = db.connectionPools.default;
+            console.log(`ℹ️ Public/User API call - Using default pool`);
+        }
+        next();
+    } catch (err) {
+        console.error('❌ Error in injectPoolForAdmin:', err);
+        req.dbPool = db.connectionPools.default;
+        next();
     }
-    
-    next();
-}
+};
 
 // Handlebars setup
 app.engine('handlebars', engine({
@@ -876,7 +915,7 @@ app.post('/admin-login', async (req, res) => {
         }
 
         // Query user từ database
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('email', sql.NVarChar, email)
             .query(`
@@ -934,19 +973,13 @@ app.post('/admin-login', async (req, res) => {
             });
         }
 
-        // Chuyển database connection theo vùng của admin
+        // ⚠️ KHÔNG chuyển database connection global nữa
+        // Connection sẽ được inject vào mỗi request thông qua requireAdmin middleware
         let dbInfo = null;
-        console.log('🔄 Checking vung_id for database switch:', user.vung_id);
         if (user.vung_id) {
-            try {
-                console.log('🔄 Calling switchDatabaseByRegion with vung_id:', user.vung_id);
-                dbInfo = await db.switchDatabaseByRegion(user.vung_id);
-                console.log('✅ Admin database switched:', dbInfo);
-            } catch (err) {
-                console.error('⚠️ Failed to switch database, using current connection:', err);
-            }
-        } else {
-            console.log('⚠️ No vung_id found, keeping default database');
+            // Chỉ lấy thông tin để log, không switch connection
+            dbInfo = await db.switchDatabaseByRegion(user.vung_id);
+            console.log('ℹ️ Admin will use database:', dbInfo);
         }
 
         // Tạo session
@@ -1030,15 +1063,66 @@ app.get('/logout', (req, res) => {
 // ==========================================
 
 // Trang admin dashboard
-app.get('/admin', requireAdmin, (req, res) => {
+app.get('/admin', requireAdmin, async (req, res) => {
     try {
+        // Get connection info để hiển thị cho admin
+        const pool = req.dbPool;
+        const dbInfo = {
+            server: pool.config.server,
+            database: pool.config.database,
+            vung_id: req.session.user.vung_id
+        };
+        
+        console.log('📊 Admin Dashboard - Using database:', dbInfo);
+        
+        // Test query để verify connection
+        const testResult = await pool.request().query('SELECT DB_NAME() as current_db, @@SERVERNAME as server_name');
+        console.log('✅ Connected to:', testResult.recordset[0]);
+        
         res.render('AD_Dashboard', { 
             layout: 'AdminMain',
             dashboardPage: true,
-            user: req.session.user
+            user: req.session.user,
+            dbInfo: {
+                ...dbInfo,
+                currentDb: testResult.recordset[0].current_db,
+                serverName: testResult.recordset[0].server_name
+            }
         });
     } catch (err) {
+        console.error('❌ Admin dashboard error:', err);
         res.status(500).send('Lỗi server!');
+    }
+});
+
+// API để kiểm tra connection info (debug)
+app.get('/api/admin/db-info', requireAdmin, async (req, res) => {
+    try {
+        const pool = req.dbPool;
+        const testResult = await pool.request().query(`
+            SELECT 
+                DB_NAME() as current_database,
+                @@SERVERNAME as server_name,
+                @@VERSION as sql_version
+        `);
+        
+        res.json({
+            success: true,
+            poolConfig: {
+                server: pool.config.server,
+                database: pool.config.database,
+                user: pool.config.user
+            },
+            actualConnection: testResult.recordset[0],
+            sessionInfo: {
+                vung_id: req.session.user.vung_id,
+                email: req.session.user.email,
+                vai_tro: req.session.user.vai_tro
+            }
+        });
+    } catch (err) {
+        console.error('❌ DB Info error:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
@@ -1115,7 +1199,7 @@ app.get('/api/cart', async (req, res) => {
         }
         
         // Lấy thông tin user
-        const userRequest = new sql.Request();
+        const userRequest = new sql.Request(db.connectionPools.default);
         const userResult = await userRequest
             .input('userId', sql.UniqueIdentifier, userId)
             .query('SELECT id, vung_id FROM users WHERE id = @userId');
@@ -1130,7 +1214,7 @@ app.get('/api/cart', async (req, res) => {
         const vungId = userResult.recordset[0].vung_id;
         
         // Tìm hoặc tạo giỏ hàng theo vùng của user
-        let cartRequest = new sql.Request();
+        let cartRequest = new sql.Request(db.connectionPools.default);
         let cartResult = await cartRequest
             .input('userId', sql.UniqueIdentifier, userId)
             .input('vungId', sql.NVarChar(10), vungId)
@@ -1139,7 +1223,7 @@ app.get('/api/cart', async (req, res) => {
         let cartId;
         if (!cartResult.recordset || cartResult.recordset.length === 0) {
             // Tạo giỏ hàng mới theo vùng
-            const createCartRequest = new sql.Request();
+            const createCartRequest = new sql.Request(db.connectionPools.default);
             await createCartRequest
                 .input('userId', sql.UniqueIdentifier, userId)
                 .input('vungId', sql.NVarChar(10), vungId)
@@ -1149,7 +1233,7 @@ app.get('/api/cart', async (req, res) => {
                 `);
             
             // Lấy cart vừa tạo
-            const newCartRequest = new sql.Request();
+            const newCartRequest = new sql.Request(db.connectionPools.default);
             const newCart = await newCartRequest
                 .input('userId', sql.UniqueIdentifier, userId)
                 .input('vungId', sql.NVarChar(10), vungId)
@@ -1161,7 +1245,7 @@ app.get('/api/cart', async (req, res) => {
         }
         
         // Lấy các sản phẩm trong giỏ hàng
-        const itemsRequest = new sql.Request();
+        const itemsRequest = new sql.Request(db.connectionPools.default);
         const itemsResult = await itemsRequest
             .input('cartId', sql.UniqueIdentifier, cartId)
             .query(`
@@ -1197,7 +1281,7 @@ app.get('/api/cart', async (req, res) => {
         
         if (variantIds.length > 0) {
             try {
-                const flashSaleRequest = new sql.Request();
+                const flashSaleRequest = new sql.Request(db.connectionPools.default);
                 const flashSaleResult = await flashSaleRequest.query(`
                     SELECT 
                         fsi.id as flash_sale_item_id,
@@ -1223,7 +1307,7 @@ app.get('/api/cart', async (req, res) => {
                 const userPurchasedMap = new Map();
                 
                 if (flashSaleItemIds.length > 0) {
-                    const purchasedRequest = new sql.Request();
+                    const purchasedRequest = new sql.Request(db.connectionPools.default);
                     const purchasedResult = await purchasedRequest
                         .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
                         .query(`
@@ -1392,7 +1476,7 @@ app.post('/api/cart', async (req, res) => {
         }
 
         // 3. Lấy vùng của user từ database
-        const userRequest = new sql.Request();
+        const userRequest = new sql.Request(db.connectionPools.default);
         const userResult = await userRequest
             .input('userId', sql.UniqueIdentifier, userId)
             .query('SELECT vung_id FROM users WHERE id = @userId');
@@ -1408,7 +1492,7 @@ app.post('/api/cart', async (req, res) => {
         console.log('📍 User region:', vung_id);
 
         // 4. Lấy hoặc tạo cart cho user theo vùng của họ
-        let cartRequest = new sql.Request();
+        let cartRequest = new sql.Request(db.connectionPools.default);
         let cartResult = await cartRequest
             .input('userId', sql.UniqueIdentifier, userId)
             .input('vungId', sql.NVarChar(10), vung_id)
@@ -1420,7 +1504,7 @@ app.post('/api/cart', async (req, res) => {
             // Tạo cart mới cho user theo vùng
             console.log('📦 Creating new cart for user:', userId, 'region:', vung_id);
             
-            const createCartRequest = new sql.Request();
+            const createCartRequest = new sql.Request(db.connectionPools.default);
             await createCartRequest
                 .input('userId', sql.UniqueIdentifier, userId)
                 .input('vungId', sql.NVarChar(10), vung_id)
@@ -1430,7 +1514,7 @@ app.post('/api/cart', async (req, res) => {
                 `);
             
             // Lấy cart vừa tạo
-            const newCartRequest = new sql.Request();
+            const newCartRequest = new sql.Request(db.connectionPools.default);
             const newCart = await newCartRequest
                 .input('userId', sql.UniqueIdentifier, userId)
                 .input('vungId', sql.NVarChar(10), vung_id)
@@ -1445,7 +1529,7 @@ app.post('/api/cart', async (req, res) => {
         }
 
         // 5. Kiểm tra variant có tồn tại trong giỏ chưa
-        const checkRequest = new sql.Request();
+        const checkRequest = new sql.Request(db.connectionPools.default);
         const checkResult = await checkRequest
             .input('cartId', sql.UniqueIdentifier, cartId)
             .input('variantId', sql.UniqueIdentifier, variant_id)
@@ -1460,7 +1544,7 @@ app.post('/api/cart', async (req, res) => {
             const existingItem = checkResult.recordset[0];
             const newQuantity = existingItem.so_luong + so_luong;
             
-            const updateRequest = new sql.Request();
+            const updateRequest = new sql.Request(db.connectionPools.default);
             await updateRequest
                 .input('itemId', sql.UniqueIdentifier, existingItem.id)
                 .input('newQty', sql.Int, newQuantity)
@@ -1483,7 +1567,7 @@ app.post('/api/cart', async (req, res) => {
             });
         } else {
             // Chưa có trong giỏ -> INSERT mới
-            const insertRequest = new sql.Request();
+            const insertRequest = new sql.Request(db.connectionPools.default);
             await insertRequest
                 .input('cartId', sql.UniqueIdentifier, cartId)
                 .input('variantId', sql.UniqueIdentifier, variant_id)
@@ -1494,7 +1578,7 @@ app.post('/api/cart', async (req, res) => {
                 `);
 
             // Lấy ID của item vừa thêm
-            const getItemRequest = new sql.Request();
+            const getItemRequest = new sql.Request(db.connectionPools.default);
             const newItemResult = await getItemRequest
                 .input('cartId', sql.UniqueIdentifier, cartId)
                 .input('variantId', sql.UniqueIdentifier, variant_id)
@@ -1541,10 +1625,10 @@ app.post('/api/cart/reduce', async (req, res) => {
 
         console.log('📉 Reducing cart item quantity:', cartItemId);
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
         
         // Kiểm tra số lượng hiện tại
-        const checkRequest = new sql.Request();
+        const checkRequest = new sql.Request(db.connectionPools.default);
         const checkResult = await checkRequest
             .input('cartItemId', sql.UniqueIdentifier, cartItemId)
             .query('SELECT so_luong FROM cart_items WHERE id = @cartItemId');
@@ -1557,7 +1641,7 @@ app.post('/api/cart/reduce', async (req, res) => {
         
         if (currentQty <= 1) {
             // Xóa nếu số lượng <= 1
-            const deleteRequest = new sql.Request();
+            const deleteRequest = new sql.Request(db.connectionPools.default);
             await deleteRequest
                 .input('cartItemId', sql.UniqueIdentifier, cartItemId)
                 .query('DELETE FROM cart_items WHERE id = @cartItemId');
@@ -1565,7 +1649,7 @@ app.post('/api/cart/reduce', async (req, res) => {
             console.log('✅ Deleted cart item');
         } else {
             // Trừ 1
-            const updateRequest = new sql.Request();
+            const updateRequest = new sql.Request(db.connectionPools.default);
             await updateRequest
                 .input('cartItemId', sql.UniqueIdentifier, cartItemId)
                 .query('UPDATE cart_items SET so_luong = so_luong - 1 WHERE id = @cartItemId');
@@ -1601,7 +1685,7 @@ app.put('/api/cart/:itemId', async (req, res) => {
         }
         
         // Lấy thông tin cart item
-        const checkRequest = new sql.Request();
+        const checkRequest = new sql.Request(db.connectionPools.default);
         const checkResult = await checkRequest
             .input('itemId', sql.UniqueIdentifier, itemId)
             .query(`
@@ -1623,7 +1707,7 @@ app.put('/api/cart/:itemId', async (req, res) => {
         const variantId = cartItem.variant_id;
         
         // Lấy thông tin variant từ SQL
-        const variantRequest = new sql.Request();
+        const variantRequest = new sql.Request(db.connectionPools.default);
         const variantResult = await variantRequest
             .input('variantId', sql.UniqueIdentifier, variantId)
             .query(`
@@ -1667,7 +1751,7 @@ app.put('/api/cart/:itemId', async (req, res) => {
         }
         
         // Cập nhật số lượng
-        const updateRequest = new sql.Request();
+        const updateRequest = new sql.Request(db.connectionPools.default);
         await updateRequest
             .input('itemId', sql.UniqueIdentifier, itemId)
             .input('quantity', sql.Int, so_luong)
@@ -1696,7 +1780,7 @@ app.delete('/api/cart/:itemId', async (req, res) => {
     try {
         const { itemId } = req.params;
         
-        const deleteRequest = new sql.Request();
+        const deleteRequest = new sql.Request(db.connectionPools.default);
         const result = await deleteRequest
             .input('itemId', sql.UniqueIdentifier, itemId)
             .query('DELETE FROM cart_items WHERE id = @itemId');
@@ -1735,7 +1819,7 @@ app.delete('/api/cart', async (req, res) => {
         }
         
         // Xóa tất cả items trong giỏ hàng
-        const deleteRequest = new sql.Request();
+        const deleteRequest = new sql.Request(db.connectionPools.default);
         await deleteRequest
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -1810,7 +1894,7 @@ app.post('/api/auth/login', async (req, res) => {
         }
         
         // Tìm user theo email hoặc số điện thoại
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('identifier', sql.NVarChar(255), identifier.trim())
             .query(`
@@ -1922,7 +2006,7 @@ app.post('/api/auth/register', async (req, res) => {
         }
         
         // Kiểm tra email đã tồn tại chưa
-        const checkRequest = new sql.Request();
+        const checkRequest = new sql.Request(db.connectionPools.default);
         const checkResult = await checkRequest
             .input('email', sql.NVarChar(255), email.trim())
             .input('so_dien_thoai', sql.NVarChar(20), so_dien_thoai || null)
@@ -1943,7 +2027,7 @@ app.post('/api/auth/register', async (req, res) => {
         const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
         
         // Tạo user mới
-        const insertRequest = new sql.Request();
+        const insertRequest = new sql.Request(db.connectionPools.default);
         await insertRequest
             .input('email', sql.NVarChar(255), email.trim())
             .input('mat_khau', sql.NVarChar(255), hashedPassword)
@@ -2008,14 +2092,14 @@ app.post('/api/auth/logout', async (req, res) => {
 // ========== API PROFILE MANAGEMENT ==========
 
 // GET /api/profile/by-email/:email - Lấy thông tin profile user bằng EMAIL
-app.get('/api/profile/by-email/:email', async (req, res) => {
+app.get('/api/profile/by-email/:email', injectPoolForAdmin, async (req, res) => {
     try {
         const { email } = req.params;
         
         console.log('📧 Getting profile by email:', email);
         
         // Lấy thông tin user từ SQL Server bằng EMAIL
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         const userResult = await request
             .input('email', sql.NVarChar, email)
             .query(`
@@ -2064,12 +2148,12 @@ app.get('/api/profile/by-email/:email', async (req, res) => {
 });
 
 // GET /api/profile/:userId - Lấy thông tin profile user (giữ lại cho tương thích)
-app.get('/api/profile/:userId', async (req, res) => {
+app.get('/api/profile/:userId', injectPoolForAdmin, async (req, res) => {
     try {
         const { userId } = req.params;
         
         // Lấy thông tin user từ SQL Server
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         const userResult = await request
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -2136,7 +2220,7 @@ app.put('/api/profile/:userId', async (req, res) => {
         }
         
         // Cập nhật SQL Server
-        const request1 = new sql.Request();
+        const request1 = new sql.Request(db.connectionPools.default);
         await request1
             .input('ho_ten', sql.NVarChar, ho_ten)
             .input('so_dien_thoai', sql.VarChar, so_dien_thoai || null)
@@ -2152,7 +2236,7 @@ app.put('/api/profile/:userId', async (req, res) => {
             `);
         
         // Lấy mongo_profile_id
-        const request2 = new sql.Request();
+        const request2 = new sql.Request(db.connectionPools.default);
         const userResult = await request2
             .input('userId', sql.UniqueIdentifier, userId)
             .query('SELECT mongo_profile_id FROM users WHERE id = @userId');
@@ -2181,7 +2265,7 @@ app.put('/api/profile/:userId', async (req, res) => {
                 mongoProfileId = mongoResult.insertedId.toString();
                 
                 // Update SQL with mongo_profile_id
-                const request3 = new sql.Request();
+                const request3 = new sql.Request(db.connectionPools.default);
                 await request3
                     .input('mongoProfileId', sql.VarChar, mongoProfileId)
                     .input('userId', sql.UniqueIdentifier, userId)
@@ -2190,7 +2274,7 @@ app.put('/api/profile/:userId', async (req, res) => {
         }
         
         // Lấy dữ liệu mới sau khi update
-        const request4 = new sql.Request();
+        const request4 = new sql.Request(db.connectionPools.default);
         const updatedUser = await request4
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -2223,7 +2307,7 @@ app.get('/api/user-addresses/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -2267,7 +2351,7 @@ app.get('/api/user-addresses/:userId/default', async (req, res) => {
     try {
         const { userId } = req.params;
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -2330,13 +2414,13 @@ app.post('/api/user-addresses', async (req, res) => {
         
         // Nếu set làm mặc định, cần bỏ default của các địa chỉ khác
         if (is_default) {
-            const updateRequest = new sql.Request();
+            const updateRequest = new sql.Request(db.connectionPools.default);
             await updateRequest
                 .input('userId1', sql.UniqueIdentifier, userId)
                 .query(`UPDATE user_addresses SET is_default = 0 WHERE user_id = @userId1`);
         }
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         
         // Insert without OUTPUT because table has triggers
         await request
@@ -2360,7 +2444,7 @@ app.post('/api/user-addresses', async (req, res) => {
             `);
         
         // Get the last inserted ID
-        const getIdRequest = new sql.Request();
+        const getIdRequest = new sql.Request(db.connectionPools.default);
         const result = await getIdRequest
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -2402,13 +2486,13 @@ app.put('/api/user-addresses/:addressId', async (req, res) => {
         
         // Nếu set làm mặc định, cần bỏ default của các địa chỉ khác
         if (is_default) {
-            const updateRequest = new sql.Request();
+            const updateRequest = new sql.Request(db.connectionPools.default);
             await updateRequest
                 .input('userId1', sql.UniqueIdentifier, userId)
                 .query(`UPDATE user_addresses SET is_default = 0 WHERE user_id = @userId1`);
         }
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         await request
             .input('addressId', sql.UniqueIdentifier, addressId)
             .input('loai_dia_chi', sql.NVarChar(20), loai_dia_chi)
@@ -2449,7 +2533,7 @@ app.delete('/api/user-addresses/:addressId', async (req, res) => {
     try {
         const { addressId } = req.params;
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         await request
             .input('addressId', sql.UniqueIdentifier, addressId)
             .query(`UPDATE user_addresses SET trang_thai = 0 WHERE id = @addressId`);
@@ -2491,7 +2575,7 @@ app.post('/api/profile/:userId/change-password', async (req, res) => {
         }
         
         // Lấy mật khẩu hiện tại
-        const request1 = new sql.Request();
+        const request1 = new sql.Request(db.connectionPools.default);
         const userResult = await request1
             .input('userId', sql.UniqueIdentifier, userId)
             .query('SELECT mat_khau FROM users WHERE id = @userId');
@@ -2517,7 +2601,7 @@ app.post('/api/profile/:userId/change-password', async (req, res) => {
         const newPasswordHash = crypto.createHash('sha256').update(new_password).digest('hex');
         
         // Cập nhật mật khẩu
-        const request2 = new sql.Request();
+        const request2 = new sql.Request(db.connectionPools.default);
         await request2
             .input('mat_khau', sql.VarChar, newPasswordHash)
             .input('userId', sql.UniqueIdentifier, userId)
@@ -2828,7 +2912,7 @@ app.get('/admin/sanpham', requireAdmin, async (req, res) => {
     try {
         console.log('🚀 Loading admin products page - NEW SCHEMA...');
         
-        const pool = await sql.connect(sqlConfig);
+        const pool = req.dbPool;
         
         // Lấy danh sách categories
         const categoriesResult = await pool.request()
@@ -2876,7 +2960,7 @@ app.get('/api/sanpham', async (req, res) => {
         console.log('🔄 API /api/sanpham called - NEW SCHEMA');
         
         const { vung_id } = req.query; // Optional filter by region
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
         
         // Lấy danh sách products với số lượng variants
         const productsResult = await pool.request()
@@ -3128,14 +3212,14 @@ app.get('/api/sanpham', async (req, res) => {
 
 
 // API cập nhật sản phẩm (toggle status, update thông tin cơ bản)
-app.put('/admin/sanpham/:id', async (req, res) => {
+app.put('/admin/sanpham/:id', requireAdmin, async (req, res) => {
     try {
         const productId = req.params.id;
         const updateData = req.body;
 
         console.log(`🔄 API: Cập nhật sản phẩm ${productId}`, updateData);
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = req.dbPool;
         const request = pool.request();
         
         // Build dynamic UPDATE query
@@ -3296,7 +3380,7 @@ app.post('/api/products', async (req, res) => {
             });
         }
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         // Kiểm tra mã sản phẩm trùng
         const checkResult = await pool.request()
@@ -3372,7 +3456,7 @@ app.put('/api/products/:id', async (req, res) => {
 
         console.log('🔄 API: Cập nhật sản phẩm', { id, ten_san_pham });
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         // Kiểm tra sản phẩm tồn tại
         const checkResult = await pool.request()
@@ -3443,7 +3527,7 @@ app.delete('/api/products/:id', async (req, res) => {
         const { id } = req.params;
         console.log('🔄 API: Xóa sản phẩm', { id });
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         // BƯỚC 1: Xóa inventory của tất cả variants trước (để tránh FK constraint)
         await pool.request()
@@ -3507,7 +3591,7 @@ app.get('/api/variants', async (req, res) => {
         const { site_origin } = req.query;
         console.log('🔄 API /api/variants called', { site_origin });
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
         
         let query = `
             SELECT 
@@ -3580,7 +3664,7 @@ app.post('/api/products/:productId/variants', async (req, res) => {
             });
         }
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         // Kiểm tra product tồn tại
         const checkProduct = await pool.request()
@@ -3680,7 +3764,7 @@ app.put('/api/variants/:id', async (req, res) => {
 
         console.log('🔄 API: Cập nhật variant', { id });
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         const updateRequest = pool.request();
         await updateRequest
@@ -3842,7 +3926,7 @@ app.delete('/api/variants/:id', async (req, res) => {
         const { id } = req.params;
         console.log('🔄 API: Xóa variant', { id });
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         // BƯỚC 1: Xóa inventory của variant này trước (để tránh FK constraint)
         const deleteInventoryResult = await pool.request()
@@ -3883,7 +3967,7 @@ app.delete('/api/variants/:id', async (req, res) => {
 app.get('/api/products/:productId/variants', async (req, res) => {
     try {
         const { productId } = req.params;
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         const result = await pool.request()
             .input('san_pham_id', sql.UniqueIdentifier, productId)
@@ -3913,7 +3997,7 @@ app.delete('/api/products/:productId/variants', async (req, res) => {
         const { productId } = req.params;
         console.log('🔄 API: Xóa tất cả variants của sản phẩm', { productId });
 
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
 
         // BƯỚC 1: Xóa inventory của các variants này trước (để tránh FK constraint)
         const deleteInventoryResult = await pool.request()
@@ -6428,7 +6512,7 @@ app.get('/api/product-variants/:productId', async (req, res) => {
         
         console.log(`📦 [NEW API] Lấy variants sản phẩm ${productId}`, site_origin ? `vùng ${site_origin}` : 'tất cả vùng');
         
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
         
         // Build query with optional site_origin filter
         let query = `
@@ -6479,7 +6563,7 @@ app.get('/api/sanpham/:id/variants', async (req, res) => {
         
         console.log(`📦 API: Lấy variants sản phẩm ${id}`, site_origin ? `vùng ${site_origin}` : 'tất cả vùng');
         
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
         
         const query = `
             SELECT 
@@ -6567,7 +6651,7 @@ app.get('/api/reviews/:productId', async (req, res) => {
         const productId = req.params.productId;
         console.log(`⭐ API: Lấy đánh giá cho sản phẩm ${productId}`);
 
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('san_pham_id', sql.UniqueIdentifier, productId)
             .query(`
@@ -6788,7 +6872,7 @@ app.get('/api/products-with-variants', async (req, res) => {
 });
 
 // GET /api/flashsales - Lấy danh sách flash sales
-app.get('/api/flashsales', async (req, res) => {
+app.get('/api/flashsales', injectPoolForAdmin, async (req, res) => {
     try {
         const { page = 1, limit = 10, trang_thai, search } = req.query;
         
@@ -6796,7 +6880,7 @@ app.get('/api/flashsales', async (req, res) => {
         if (trang_thai) filters.trang_thai = trang_thai;
         if (search) filters.search = search;
         
-        const flashSales = await DataModel.SQL.FlashSale.findAll(filters);
+        const flashSales = await DataModel.SQL.FlashSale.findAll(req.dbPool, filters);
         
         // Pagination
         const startIndex = (page - 1) * limit;
@@ -7362,9 +7446,9 @@ app.get('/admin/diachi', requireAdmin, async (req, res) => {
 // ===== REGIONS API =====
 
 // GET /api/regions - Lấy danh sách vùng miền
-app.get('/api/regions', async (req, res) => {
+app.get('/api/regions', injectPoolForAdmin, async (req, res) => {
     try {
-        const regions = await DataModel.SQL.Region.findAll();
+        const regions = await DataModel.SQL.Region.findAll(req.dbPool);
         
         res.json({
             success: true,
@@ -7499,7 +7583,7 @@ app.delete('/api/regions/:id', async (req, res) => {
 // ===== PROVINCES API =====
 
 // GET /api/provinces - Lấy danh sách tỉnh/thành
-app.get('/api/provinces', async (req, res) => {
+app.get('/api/provinces', injectPoolForAdmin, async (req, res) => {
     try {
         const { vung_id, trang_thai } = req.query;
         
@@ -7507,7 +7591,7 @@ app.get('/api/provinces', async (req, res) => {
         if (vung_id) filters.vung_id = vung_id;
         if (trang_thai !== undefined) filters.trang_thai = parseInt(trang_thai);
         
-        const provinces = await DataModel.SQL.Province.findAll(filters);
+        const provinces = await DataModel.SQL.Province.findAll(req.dbPool, filters);
         
         res.json({
             success: true,
@@ -7523,7 +7607,7 @@ app.get('/api/provinces', async (req, res) => {
 });
 
 // GET /api/provinces/:id - Lấy thông tin tỉnh/thành
-app.get('/api/provinces/:id', async (req, res) => {
+app.get('/api/provinces/:id', injectPoolForAdmin, async (req, res) => {
     try {
         const province = await DataModel.SQL.Province.findById(req.params.id);
         
@@ -7676,7 +7760,7 @@ app.get('/api/products/by-region/:regionId', async (req, res) => {
             ORDER BY p.ngay_tao DESC
         `;
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('regionId', sql.UniqueIdentifier, regionId)
             .query(query);
@@ -7723,7 +7807,7 @@ app.get('/api/products/by-region/:regionId', async (req, res) => {
 // =============================================
 
 // GET /api/shipping-methods - Lấy tất cả phương thức vận chuyển
-app.get('/api/shipping-methods', async (req, res) => {
+app.get('/api/shipping-methods', injectPoolForAdmin, async (req, res) => {
     try {
         const query = `
             SELECT 
@@ -7738,7 +7822,7 @@ app.get('/api/shipping-methods', async (req, res) => {
             ORDER BY sm.chi_phi_co_ban ASC
         `;
         
-        const result = await sql.query(query);
+        const result = await req.dbPool.request().query(query);
         
         res.json({
             success: true,
@@ -7754,7 +7838,7 @@ app.get('/api/shipping-methods', async (req, res) => {
 });
 
 // GET /api/shipping-methods/by-address/:addressId - Lấy shipping methods theo địa chỉ
-app.get('/api/shipping-methods/by-address/:addressId', async (req, res) => {
+app.get('/api/shipping-methods/by-address/:addressId', injectPoolForAdmin, async (req, res) => {
     try {
         const { addressId } = req.params;
         
@@ -7785,7 +7869,7 @@ app.get('/api/shipping-methods/by-address/:addressId', async (req, res) => {
             ORDER BY (sm.chi_phi_co_ban + smr.chi_phi_van_chuyen) ASC
         `;
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         const result = await request
             .input('addressId', sql.UniqueIdentifier, addressId)
             .query(query);
@@ -7836,7 +7920,7 @@ app.get('/api/shipping-methods/by-address/:addressId', async (req, res) => {
 });
 
 // GET /api/shipping-methods/by-region/:regionId - Lấy shipping methods theo vùng
-app.get('/api/shipping-methods/by-region/:regionId', async (req, res) => {
+app.get('/api/shipping-methods/by-region/:regionId', injectPoolForAdmin, async (req, res) => {
     try {
         const { regionId } = req.params;
         
@@ -7862,7 +7946,7 @@ app.get('/api/shipping-methods/by-region/:regionId', async (req, res) => {
             ORDER BY (sm.chi_phi_co_ban + smr.chi_phi_van_chuyen) ASC
         `;
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         const result = await request
             .input('regionId', sql.NVarChar(10), regionId)
             .query(query);
@@ -7904,7 +7988,7 @@ app.get('/api/shipping-methods/by-region/:regionId', async (req, res) => {
 });
 
 // GET /api/shipping-methods/:id - Lấy chi tiết một phương thức vận chuyển
-app.get('/api/shipping-methods/:id', async (req, res) => {
+app.get('/api/shipping-methods/:id', injectPoolForAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         
@@ -7920,7 +8004,7 @@ app.get('/api/shipping-methods/:id', async (req, res) => {
             WHERE sm.id = @id
         `;
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         const result = await request
             .input('id', sql.UniqueIdentifier, id)
             .query(query);
@@ -7967,7 +8051,7 @@ app.get('/api/shipping-methods/:id', async (req, res) => {
 // ===== WARDS API =====
 
 // GET /api/wards - Lấy danh sách phường/xã
-app.get('/api/wards', async (req, res) => {
+app.get('/api/wards', injectPoolForAdmin, async (req, res) => {
     try {
         const { tinh_thanh_id, loai, trang_thai } = req.query;
         
@@ -7976,7 +8060,7 @@ app.get('/api/wards', async (req, res) => {
         if (loai) filters.loai = loai;
         if (trang_thai !== undefined) filters.trang_thai = parseInt(trang_thai);
         
-        const wards = await DataModel.SQL.Ward.findAll(filters);
+        const wards = await DataModel.SQL.Ward.findAll(req.dbPool, filters);
         
         res.json({
             success: true,
@@ -8117,8 +8201,8 @@ app.delete('/api/wards/:id', async (req, res) => {
 // Admin render route for Users management page
 app.get('/admin/nguoidung', requireAdmin, async (req, res) => {
     try {
-        // Lấy danh sách users từ SQL
-        const users = await DataModel.SQL.User.findAll();
+        // Lấy danh sách users từ SQL - sử dụng pool theo vùng
+        const users = await DataModel.SQL.User.findAll(req.dbPool);
         
         res.render('nguoidung', {
             layout: 'AdminMain',
@@ -8131,7 +8215,7 @@ app.get('/admin/nguoidung', requireAdmin, async (req, res) => {
 });
 
 // GET /api/users - list users with filters
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', injectPoolForAdmin, async (req, res) => {
     try {
         const { search, status } = req.query;
 
@@ -8139,7 +8223,7 @@ app.get('/api/users', async (req, res) => {
         const filters = {};
         if (status !== undefined) filters.status = parseInt(status);
         
-        let users = await DataModel.SQL.User.findAll(filters);
+        let users = await DataModel.SQL.User.findAll(req.dbPool, filters);
 
         // Apply search filter if provided
         if (search) {
@@ -8493,11 +8577,12 @@ app.get('/admin/inventory', requireAdmin, async (req, res) => {
     try {
         console.log('🚀 Loading admin inventory page...');
         
-        // Load warehouses và products
-        const warehouses = await DataModel.SQL.Warehouse.findAll();
+        const pool = req.dbPool;
+        
+        // Load warehouses và products - sử dụng pool theo vùng
+        const warehouses = await DataModel.SQL.Warehouse.findAll(pool);
         
         // Load products (replicated across all sites)
-        const pool = await sql.connect(sqlConfig);
         const productsResult = await pool.request().query(`
             SELECT DISTINCT
                 id,
@@ -8568,11 +8653,11 @@ app.get('/admin/donhang', requireAdmin, async (req, res) => {
 // API ENDPOINTS FOR ORDERS
 
 // GET /api/donhang - Get all orders with details
-app.get('/api/donhang', async (req, res) => {
+app.get('/api/donhang', injectPoolForAdmin, async (req, res) => {
     try {
         console.log('🔄 API /api/donhang called');
         
-        const pool = await sql.connect(sqlConfig);
+        const pool = req.dbPool;
         const result = await pool.request().query(`
             SELECT 
                 o.id,
@@ -8627,7 +8712,7 @@ app.get('/api/donhang/:id', async (req, res) => {
             });
         }
         
-        const pool = await sql.connect(sqlConfig);
+        const pool = db.connectionPools.default;
         console.log('✅ SQL connected, querying order...');
         
         // Get order info with all details in one query
@@ -8775,7 +8860,7 @@ app.put('/api/donhang/:id/status', requireAdmin, async (req, res) => {
         }
 
         // Get current status before updating
-        const checkRequest = new sql.Request();
+        const checkRequest = new sql.Request(db.connectionPools.default);
         const currentOrder = await checkRequest
             .input('id', sql.UniqueIdentifier, id)
             .query('SELECT trang_thai FROM orders WHERE id = @id');
@@ -8868,11 +8953,11 @@ app.put('/api/donhang/:id/status', requireAdmin, async (req, res) => {
 // API ENDPOINTS FOR INVENTORY
 
 // GET /api/inventory - Get all inventory items
-app.get('/api/inventory', async (req, res) => {
+app.get('/api/inventory', injectPoolForAdmin, async (req, res) => {
     try {
         console.log('🔄 API /api/inventory called');
         
-        const inventory = await DataModel.SQL.Inventory.findAll();
+        const inventory = await DataModel.SQL.Inventory.findAll(req.dbPool);
 
         res.json({ 
             success: true, 
@@ -9181,13 +9266,13 @@ app.get('/api/flashsales', async (req, res) => {
 });
 
 // Alias route for frontend compatibility (with hyphen)
-app.get('/api/flash-sales', async (req, res) => {
+app.get('/api/flash-sales', injectPoolForAdmin, async (req, res) => {
     try {
         const filters = {};
         if (req.query.trang_thai) filters.trang_thai = req.query.trang_thai;
         if (req.query.search) filters.search = req.query.search;
         
-        const flashSales = await DataModel.SQL.FlashSale.findAll(filters);
+        const flashSales = await DataModel.SQL.FlashSale.findAll(req.dbPool, filters);
         res.json(flashSales);
     } catch (error) {
         console.error('Flash Sales GET Error:', error);
@@ -9196,7 +9281,7 @@ app.get('/api/flash-sales', async (req, res) => {
 });
 
 // GET /api/flash-sales/:id - Get single flash sale by ID
-app.get('/api/flash-sales/:id', async (req, res) => {
+app.get('/api/flash-sales/:id', injectPoolForAdmin, async (req, res) => {
     try {
         console.log('🔍 [NEW API] Getting flash sale by ID:', req.params.id);
         const flashSale = await DataModel.SQL.FlashSale.findById(req.params.id);
@@ -9215,7 +9300,7 @@ app.get('/api/flash-sales/:id', async (req, res) => {
 });
 
 // GET /api/flash-sales/:id/items - Get flash sale items (variant-based from SQL product_variants)
-app.get('/api/flash-sales/:id/items', async (req, res) => {
+app.get('/api/flash-sales/:id/items', injectPoolForAdmin, async (req, res) => {
     try {
         console.log('📦 [NEW API] Getting flash sale items for:', req.params.id);
         
@@ -9229,10 +9314,10 @@ app.get('/api/flash-sales/:id/items', async (req, res) => {
             return res.json([]);
         }
 
-        // Enrich items with product_variants data - Sử dụng connection pool global
+        // Enrich items with product_variants data - Sử dụng connection pool từ middleware
         const enrichedItems = await Promise.all(items.map(async (item) => {
             try {
-                const request = new sql.Request();
+                const request = new sql.Request(req.dbPool);
                 const variantResult = await request
                     .input('variantId', sql.UniqueIdentifier, item.san_pham_id)
                     .query(`
@@ -9711,11 +9796,11 @@ app.get('/api/mongodb-details/:mongoId', async (req, res) => {
 // API ENDPOINTS FOR WAREHOUSES
 
 // GET /api/warehouses - Get all warehouses
-app.get('/api/warehouses', async (req, res) => {
+app.get('/api/warehouses', injectPoolForAdmin, async (req, res) => {
     try {
         console.log('🔄 API /api/warehouses called');
         
-        const warehouses = await DataModel.SQL.Warehouse.findAll();
+        const warehouses = await DataModel.SQL.Warehouse.findAll(req.dbPool);
 
         res.json({ 
             success: true, 
@@ -9884,7 +9969,7 @@ app.get('/admin/voucher', requireAdmin, async (req, res) => {
 });
 
 // GET /api/vouchers - Lấy danh sách vouchers
-app.get('/api/vouchers', async (req, res) => {
+app.get('/api/vouchers', injectPoolForAdmin, async (req, res) => {
     try {
         const { page = 1, limit = 10, trang_thai, loai_giam_gia, pham_vi, search } = req.query;
         
@@ -9900,7 +9985,7 @@ app.get('/api/vouchers', async (req, res) => {
             WHERE 1=1
         `;
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         
         // Filter by status
         if (trang_thai === 'active') {
@@ -9958,7 +10043,7 @@ app.get('/api/vouchers', async (req, res) => {
 // GET /api/vouchers/:id - Lấy thông tin voucher
 app.get('/api/vouchers/:id', async (req, res) => {
     try {
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('id', sql.UniqueIdentifier, req.params.id)
             .query(`
@@ -9998,7 +10083,7 @@ app.get('/api/vouchers/:id', async (req, res) => {
 // GET /api/vouchers/:id/products - Lấy danh sách sản phẩm của voucher
 app.get('/api/vouchers/:id/products', async (req, res) => {
     try {
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('voucher_id', sql.UniqueIdentifier, req.params.id)
             .query(`
@@ -10155,7 +10240,7 @@ app.post('/api/vouchers', async (req, res) => {
         }
         
         // Bước 1: Tạo voucher trong SQL
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('ma_voucher', sql.NVarChar(50), voucherData.ma_voucher)
             .input('ten_voucher', sql.NVarChar(255), voucherData.ten_voucher)
@@ -10221,7 +10306,7 @@ app.post('/api/vouchers', async (req, res) => {
         console.log('✅ MongoDB created with _id:', mongoDoc._id);
         
         // Bước 3: Update SQL để lưu mongo_voucher_detail_id
-        const updateRequest = new sql.Request();
+        const updateRequest = new sql.Request(db.connectionPools.default);
         await updateRequest
             .input('id', sql.UniqueIdentifier, newVoucher.id)
             .input('mongo_voucher_detail_id', sql.NVarChar(50), mongoDoc._id.toString())
@@ -10241,7 +10326,7 @@ app.post('/api/vouchers', async (req, res) => {
                     throw new Error(`Product "${product.productName}" thiếu variant_id`);
                 }
                 
-                const insertRequest = new sql.Request();
+                const insertRequest = new sql.Request(db.connectionPools.default);
                 await insertRequest
                     .input('voucher_id', sql.UniqueIdentifier, newVoucher.id)
                     .input('san_pham_id', sql.UniqueIdentifier, product.variantId)
@@ -10308,7 +10393,7 @@ app.put('/api/vouchers/:id', async (req, res) => {
         }
         
         // Update voucher basic info
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('id', sql.UniqueIdentifier, req.params.id)
             .input('ma_voucher', sql.NVarChar(50), voucherData.ma_voucher)
@@ -10361,7 +10446,7 @@ app.put('/api/vouchers/:id', async (req, res) => {
             const voucherVungId = updatedVoucher.vung_id;
             
             // Delete existing products
-            const deleteRequest = new sql.Request();
+            const deleteRequest = new sql.Request(db.connectionPools.default);
             await deleteRequest
                 .input('voucher_id', sql.UniqueIdentifier, req.params.id)
                 .query('DELETE FROM voucher_products WHERE voucher_id = @voucher_id');
@@ -10377,7 +10462,7 @@ app.put('/api/vouchers/:id', async (req, res) => {
                 }
                 
                 // Verify variant exists and check site_origin matches voucher's vung_id
-                const verifyRequest = new sql.Request();
+                const verifyRequest = new sql.Request(db.connectionPools.default);
                 const variantCheck = await verifyRequest
                     .input('variant_id', sql.UniqueIdentifier, product.variantId)
                     .query(`SELECT id, site_origin FROM product_variants WHERE id = @variant_id`);
@@ -10395,7 +10480,7 @@ app.put('/api/vouchers/:id', async (req, res) => {
                     throw new Error(`Variant "${product.variantName}" thuộc vùng "${variant.site_origin}" không khớp với voucher vùng "${voucherVungId}". Merge replication không cho phép.`);
                 }
                 
-                const insertRequest = new sql.Request();
+                const insertRequest = new sql.Request(db.connectionPools.default);
                 await insertRequest
                     .input('voucher_id', sql.UniqueIdentifier, req.params.id)
                     .input('san_pham_id', sql.UniqueIdentifier, product.variantId)
@@ -10410,7 +10495,7 @@ app.put('/api/vouchers/:id', async (req, res) => {
             console.log('✅ Voucher products updated successfully');
         } else if (voucherData.pham_vi !== 'theo_san_pham') {
             // If pham_vi changed from 'theo_san_pham' to something else, clear products
-            const deleteRequest = new sql.Request();
+            const deleteRequest = new sql.Request(db.connectionPools.default);
             await deleteRequest
                 .input('voucher_id', sql.UniqueIdentifier, req.params.id)
                 .query('DELETE FROM voucher_products WHERE voucher_id = @voucher_id');
@@ -10436,7 +10521,7 @@ app.delete('/api/vouchers/:id', async (req, res) => {
         console.log('🗑️ Deleting voucher:', req.params.id);
         
         // Get voucher info first
-        const getRequest = new sql.Request();
+        const getRequest = new sql.Request(db.connectionPools.default);
         const getResult = await getRequest
             .input('id', sql.UniqueIdentifier, req.params.id)
             .query('SELECT mongo_voucher_detail_id FROM vouchers WHERE id = @id');
@@ -10451,13 +10536,13 @@ app.delete('/api/vouchers/:id', async (req, res) => {
         const mongoDetailId = getResult.recordset[0].mongo_voucher_detail_id;
         
         // Delete voucher_products first (due to foreign key)
-        const deleteProductsRequest = new sql.Request();
+        const deleteProductsRequest = new sql.Request(db.connectionPools.default);
         await deleteProductsRequest
             .input('voucher_id', sql.UniqueIdentifier, req.params.id)
             .query('DELETE FROM voucher_products WHERE voucher_id = @voucher_id');
         
         // Delete from SQL
-        const deleteRequest = new sql.Request();
+        const deleteRequest = new sql.Request(db.connectionPools.default);
         await deleteRequest
             .input('id', sql.UniqueIdentifier, req.params.id)
             .query('DELETE FROM vouchers WHERE id = @id');
@@ -10500,7 +10585,7 @@ app.post('/api/vouchers/validate', async (req, res) => {
         }
         
         // Tìm voucher
-        const voucherRequest = new sql.Request();
+        const voucherRequest = new sql.Request(db.connectionPools.default);
         const voucherResult = await voucherRequest
             .input('ma_voucher', sql.NVarChar, ma_voucher)
             .query(`
@@ -10545,7 +10630,7 @@ app.post('/api/vouchers/validate', async (req, res) => {
         }
         
         // Kiểm tra user đã sử dụng voucher này chưa
-        const usedRequest = new sql.Request();
+        const usedRequest = new sql.Request(db.connectionPools.default);
         const usedResult = await usedRequest
             .input('voucher_id', sql.UniqueIdentifier, voucher.id)
             .input('user_id', sql.UniqueIdentifier, userId)
@@ -10575,7 +10660,7 @@ app.post('/api/vouchers/validate', async (req, res) => {
         
         // Kiểm tra phạm vi áp dụng
         if (voucher.pham_vi === 'theo_san_pham') {
-            const productIdsRequest = new sql.Request();
+            const productIdsRequest = new sql.Request(db.connectionPools.default);
             const productIdsResult = await productIdsRequest
                 .input('voucher_id', sql.UniqueIdentifier, voucher.id)
                 .query(`
@@ -10687,7 +10772,7 @@ app.post('/api/orders', async (req, res) => {
 
         // 1. Query warehouses BEFORE starting transaction
         console.log('Step 1: Allocating warehouses...');
-        const warehouseRequest = new sql.Request();
+        const warehouseRequest = new sql.Request(db.connectionPools.default);
         const warehouseResult = await warehouseRequest
             .input('vung_id', sql.NVarChar(10), vung_khach_hang)
             .query(`
@@ -10722,7 +10807,7 @@ app.post('/api/orders', async (req, res) => {
         
         if (variantIds.length > 0) {
             try {
-                const flashSaleCheckRequest = new sql.Request();
+                const flashSaleCheckRequest = new sql.Request(db.connectionPools.default);
                 const flashSaleCheckResult = await flashSaleCheckRequest.query(`
                     SELECT 
                         fsi.id as flash_sale_item_id,
@@ -10760,7 +10845,7 @@ app.post('/api/orders', async (req, res) => {
             const flashSaleInfo = flashSaleMap.get(item.variant_id);
             
             // Get variant info with site_origin
-            const variantRequest = new sql.Request();
+            const variantRequest = new sql.Request(db.connectionPools.default);
             const variantResult = await variantRequest
                 .input('variant_id', sql.UniqueIdentifier, item.variant_id)
                 .query(`
@@ -10777,7 +10862,7 @@ app.post('/api/orders', async (req, res) => {
             const site_origin = variant.site_origin || vung_khach_hang; // Fallback to customer region
             
             // Query inventory to find warehouse with available stock
-            const inventoryRequest = new sql.Request();
+            const inventoryRequest = new sql.Request(db.connectionPools.default);
             const inventoryResult = await inventoryRequest
                 .input('variant_id', sql.UniqueIdentifier, item.variant_id)
                 .input('quantity', sql.Int, parseInt(item.so_luong))
@@ -10821,100 +10906,175 @@ app.post('/api/orders', async (req, res) => {
         
         console.log('Items with warehouse allocation from inventory:', itemsWithWarehouse);
 
-        // Determine site_processed from the first item's site_origin (primary product region)
-        const site_processed = itemsWithWarehouse.length > 0 
-            ? itemsWithWarehouse[0].site_origin 
-            : vung_khach_hang;
-
-        // Calculate chi_phi_noi_bo if cross-region fulfillment
-        let chi_phi_noi_bo = 0;
-        const hasCrossRegion = itemsWithWarehouse.some(
-            item => item.warehouse_region !== vung_khach_hang
-        );
-        if (hasCrossRegion) {
-            // TODO: Calculate based on distance/region mapping
-            chi_phi_noi_bo = phi_van_chuyen_khach * 0.5; // Simplified calculation
+        // 🔥 GROUP ITEMS BY SITE_ORIGIN để tạo split orders
+        const itemsBySiteOrigin = {};
+        for (const item of itemsWithWarehouse) {
+            const siteOrigin = item.site_origin || vung_khach_hang;
+            if (!itemsBySiteOrigin[siteOrigin]) {
+                itemsBySiteOrigin[siteOrigin] = [];
+            }
+            itemsBySiteOrigin[siteOrigin].push(item);
         }
+        
+        const siteOrigins = Object.keys(itemsBySiteOrigin);
+        const is_split_order = siteOrigins.length > 1; // Nhiều site_origin = split order
+        
+        console.log('🔀 Split order analysis:', {
+            totalSites: siteOrigins.length,
+            sites: siteOrigins,
+            isSplitOrder: is_split_order
+        });
 
-        // Check if split order (items from different warehouses)
-        const uniqueWarehouses = [...new Set(itemsWithWarehouse.map(i => i.warehouse_id))];
-        const is_split_order = uniqueWarehouses.length > 1;
-
-        // Calculate total
-        const tong_thanh_toan = tong_tien_hang - (gia_tri_giam_voucher || 0) + (phi_van_chuyen_khach || 0);
-
-        // Generate ma_don_hang (format: DH + timestamp + random)
+        // Generate ma_don_hang (format: DH + timestamp + random) - CHUNG cho tất cả orders
         const ma_don_hang = 'DH' + Date.now() + Math.floor(Math.random() * 1000);
 
-        // NOW start transaction
-        const transaction = new sql.Transaction();
+        // NOW start transaction with proper pool
+        const transaction = new sql.Transaction(db.connectionPools.default);
         await transaction.begin();
 
         try {
-            console.log('Step 2: Creating order...');
-            console.log('Order params:', {
-                ma_don_hang,
-                userId,
-                vung_khach_hang,
-                site_processed,
-                shipping_method_region_id,
-                addressId,
-                kho_giao_hang,
-                voucher_id,
-                payment_method,
-                tong_tien_hang,
-                gia_tri_giam_voucher,
-                phi_van_chuyen_khach,
-                chi_phi_noi_bo,
-                tong_thanh_toan,
-                is_split_order
-            });
-
-            // 2. Create order
-            const orderRequest = new sql.Request(transaction);
-            const orderResult = await orderRequest
-                .input('ma_don_hang', sql.NVarChar(50), ma_don_hang)
-                .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
-                .input('vung_don_hang', sql.NVarChar(10), vung_khach_hang)
-                .input('site_processed', sql.NVarChar(10), site_processed)
-                .input('shipping_method_region_id', sql.UniqueIdentifier, shipping_method_region_id)
-                .input('dia_chi_giao_hang_id', sql.UniqueIdentifier, addressId)
-                .input('kho_giao_hang', sql.UniqueIdentifier, kho_giao_hang)
-                .input('voucher_id', sql.UniqueIdentifier, voucher_id || null)
-                .input('payment_method', sql.NVarChar(50), payment_method || 'cod')
-                .input('ghi_chu_order', sql.NVarChar(sql.MAX), ghi_chu_order || null)
-                .input('tong_tien_hang', sql.Decimal(15, 2), parseFloat(tong_tien_hang) || 0)
-                .input('gia_tri_giam_voucher', sql.Decimal(15, 2), parseFloat(gia_tri_giam_voucher) || 0)
-                .input('phi_van_chuyen', sql.Decimal(15, 2), parseFloat(phi_van_chuyen_khach) || 0)
-                .input('chi_phi_noi_bo', sql.Decimal(15, 2), parseFloat(chi_phi_noi_bo) || 0)
-                .input('tong_thanh_toan', sql.Decimal(15, 2), parseFloat(tong_thanh_toan) || 0)
-                .input('is_split_order', sql.Bit, is_split_order ? 1 : 0)
-                .input('trang_thai', sql.NVarChar(20), 'cho_xac_nhan')
-                .query(`
-                    INSERT INTO orders (
-                        ma_don_hang, nguoi_dung_id, vung_don_hang, site_processed, shipping_method_region_id,
-                        dia_chi_giao_hang_id, kho_giao_hang, voucher_id, payment_method, ghi_chu_order,
-                        tong_tien_hang, gia_tri_giam_voucher, phi_van_chuyen, chi_phi_noi_bo, 
-                        tong_thanh_toan, is_split_order, trang_thai, ngay_tao
-                    )
-                    VALUES (
-                        @ma_don_hang, @nguoi_dung_id, @vung_don_hang, @site_processed, @shipping_method_region_id,
-                        @dia_chi_giao_hang_id, @kho_giao_hang, @voucher_id, @payment_method, @ghi_chu_order,
-                        @tong_tien_hang, @gia_tri_giam_voucher, @phi_van_chuyen, @chi_phi_noi_bo,
-                        @tong_thanh_toan, @is_split_order, @trang_thai, GETDATE()
-                    );
-                `);
+            console.log('Step 2: Creating orders (one per site_origin)...');
             
-            const orderSelectResult = await orderRequest.query(`SELECT TOP 1 id, ma_don_hang FROM orders WHERE ma_don_hang = @ma_don_hang ORDER BY ngay_tao DESC`);
+            const createdOrders = []; // Track all created orders
+            
+            // 🔥 CREATE ONE ORDER PER SITE_ORIGIN
+            for (const siteOrigin of siteOrigins) {
+                const siteItems = itemsBySiteOrigin[siteOrigin];
+                
+                // ✅ 1. Query kho giao hàng cho site này (ưu tiên kho cùng vùng)
+                const siteWarehouseRequest = new sql.Request(transaction);
+                const siteWarehouseResult = await siteWarehouseRequest
+                    .input('site_origin', sql.NVarChar(10), siteOrigin)
+                    .query(`
+                        SELECT TOP 1 id as warehouse_id, ten_kho, vung_id
+                        FROM warehouses
+                        WHERE trang_thai = 1
+                          AND vung_id = @site_origin
+                        ORDER BY 
+                            priority_levels DESC,
+                            is_primary DESC
+                    `);
+                
+                if (siteWarehouseResult.recordset.length === 0) {
+                    throw new Error(`Không tìm thấy kho hàng cho vùng ${siteOrigin}`);
+                }
+                
+                const site_kho_giao_hang = siteWarehouseResult.recordset[0].warehouse_id;
+                console.log(`📦 Kho giao hàng cho site ${siteOrigin}:`, siteWarehouseResult.recordset[0]);
+                
+                // ✅ 2. Query phí vận chuyển cho site này
+                const siteShippingRequest = new sql.Request(transaction);
+                const siteShippingResult = await siteShippingRequest
+                    .input('shipping_method_id', sql.UniqueIdentifier, shipping_method_region_id)
+                    .input('site_origin', sql.NVarChar(10), siteOrigin)
+                    .query(`
+                        SELECT TOP 1 
+                            smr.id as shipping_method_region_id,
+                            smr.chi_phi_van_chuyen,
+                            smr.thoi_gian_giao_du_kien
+                        FROM shipping_method_regions smr
+                        WHERE smr.shipping_method_id = @shipping_method_id
+                          AND smr.region_id = @site_origin
+                          AND smr.trang_thai = 1
+                    `);
+                
+                // Fallback: nếu không tìm thấy shipping cho site_origin, dùng vùng khách hàng
+                let site_shipping_method_region_id = shipping_method_region_id;
+                let site_phi_van_chuyen_base = 0;
+                
+                if (siteShippingResult.recordset.length > 0) {
+                    site_shipping_method_region_id = siteShippingResult.recordset[0].shipping_method_region_id;
+                    site_phi_van_chuyen_base = parseFloat(siteShippingResult.recordset[0].chi_phi_van_chuyen) || 0;
+                    console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base);
+                } else {
+                    // Fallback: phân bổ theo tỉ lệ từ phi_van_chuyen_khach
+                    site_phi_van_chuyen_base = is_split_order 
+                        ? (phi_van_chuyen_khach / siteOrigins.length)
+                        : phi_van_chuyen_khach;
+                    console.log(`⚠️ Không tìm thấy phí ship cho site ${siteOrigin}, dùng fallback:`, site_phi_van_chuyen_base);
+                }
+                
+                // Calculate totals for this site's items
+                const site_tong_tien_hang = siteItems.reduce((sum, item) => 
+                    sum + (parseFloat(item.don_gia) * parseInt(item.so_luong)), 0
+                );
+                
+                // Phân bổ voucher theo tỉ lệ (nếu split)
+                const site_gia_tri_giam = is_split_order && gia_tri_giam_voucher
+                    ? (gia_tri_giam_voucher * site_tong_tien_hang / tong_tien_hang)
+                    : (gia_tri_giam_voucher || 0);
+                
+                // Calculate chi_phi_noi_bo if cross-region fulfillment
+                const hasCrossRegion = siteItems.some(
+                    item => item.warehouse_region !== siteOrigin
+                );
+                const site_chi_phi_noi_bo = hasCrossRegion ? (site_phi_van_chuyen_base * 0.5) : 0;
+                
+                const site_tong_thanh_toan = site_tong_tien_hang - site_gia_tri_giam + site_phi_van_chuyen_base;
+                
+                console.log(`📦 Creating order for site: ${siteOrigin}`, {
+                    ma_don_hang,
+                    site_processed: siteOrigin,
+                    site_kho_giao_hang,
+                    site_shipping_method_region_id,
+                    itemCount: siteItems.length,
+                    site_tong_tien_hang,
+                    site_phi_van_chuyen_base,
+                    site_gia_tri_giam,
+                    site_chi_phi_noi_bo,
+                    site_tong_thanh_toan,
+                    is_split_order
+                });
 
-            console.log('Order created, result:', orderSelectResult.recordset);
-            const orderId = orderSelectResult.recordset[0].id;
-            const orderCode = orderSelectResult.recordset[0].ma_don_hang;
-            console.log('Order ID:', orderId, 'Order Code:', orderCode);
+                // 2. Create order for this site
+                // Generate UNIQUEIDENTIFIER for order ID (since orders.id is UNIQUEIDENTIFIER, not IDENTITY)
+                const orderId = uuidv4();
+                
+                const orderRequest = new sql.Request(transaction);
+                await orderRequest
+                    .input('id', sql.UniqueIdentifier, orderId) // ✅ Provide ID explicitly
+                    .input('ma_don_hang', sql.NVarChar(50), ma_don_hang) // ✅ SAME ma_don_hang
+                    .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                    .input('vung_don_hang', sql.NVarChar(10), vung_khach_hang)
+                    .input('site_processed', sql.NVarChar(10), siteOrigin) // ✅ = site_origin
+                    .input('shipping_method_region_id', sql.UniqueIdentifier, site_shipping_method_region_id) // ✅ Site-specific
+                    .input('dia_chi_giao_hang_id', sql.UniqueIdentifier, addressId)
+                    .input('kho_giao_hang', sql.UniqueIdentifier, site_kho_giao_hang) // ✅ Site-specific warehouse
+                    .input('voucher_id', sql.UniqueIdentifier, voucher_id || null)
+                    .input('payment_method', sql.NVarChar(50), payment_method || 'cod')
+                    .input('ghi_chu_order', sql.NVarChar(sql.MAX), ghi_chu_order || null)
+                    .input('tong_tien_hang', sql.Decimal(15, 2), site_tong_tien_hang)
+                    .input('gia_tri_giam_voucher', sql.Decimal(15, 2), site_gia_tri_giam)
+                    .input('phi_van_chuyen', sql.Decimal(15, 2), site_phi_van_chuyen_base) // ✅ Site-specific shipping
+                    .input('chi_phi_noi_bo', sql.Decimal(15, 2), site_chi_phi_noi_bo)
+                    .input('tong_thanh_toan', sql.Decimal(15, 2), site_tong_thanh_toan)
+                    .input('is_split_order', sql.Bit, is_split_order ? 1 : 0) // ✅ = 1 if multiple sites
+                    .input('trang_thai', sql.NVarChar(20), 'cho_xac_nhan')
+                    .query(`
+                        INSERT INTO orders (
+                            id, ma_don_hang, nguoi_dung_id, vung_don_hang, site_processed, shipping_method_region_id,
+                            dia_chi_giao_hang_id, kho_giao_hang, voucher_id, payment_method, ghi_chu_order,
+                            tong_tien_hang, gia_tri_giam_voucher, phi_van_chuyen, chi_phi_noi_bo, 
+                            tong_thanh_toan, is_split_order, trang_thai, ngay_tao
+                        )
+                        VALUES (
+                            @id, @ma_don_hang, @nguoi_dung_id, @vung_don_hang, @site_processed, @shipping_method_region_id,
+                            @dia_chi_giao_hang_id, @kho_giao_hang, @voucher_id, @payment_method, @ghi_chu_order,
+                            @tong_tien_hang, @gia_tri_giam_voucher, @phi_van_chuyen, @chi_phi_noi_bo,
+                            @tong_thanh_toan, @is_split_order, @trang_thai, GETDATE()
+                        );
+                    `);
+                console.log(`✅ Order created for site ${siteOrigin}: Order ID =`, orderId);
+                
+                createdOrders.push({
+                    orderId,
+                    siteOrigin,
+                    items: siteItems
+                });
 
-            console.log('Step 3: Creating order details...');
-            // 3. Create order details with allocated warehouses
-            for (const item of itemsWithWarehouse) {
+                console.log(`Step 3: Creating order details for order ${orderId}...`);
+                // 3. Create order details ONLY for this site's items
+                for (const item of siteItems) {
                 console.log('Processing item:', item);
                 const itemRequest = new sql.Request(transaction);
                 await itemRequest
@@ -11077,81 +11237,86 @@ app.post('/api/orders', async (req, res) => {
                     console.error('❌ Error updating MongoDB stock:', mongoError);
                     // Don't rollback transaction for MongoDB failure
                 }
-            }
-
-            // 7.5. Insert flash_sale_orders for flash sale items
-            console.log('Step 4: Recording flash sale orders...');
-            for (const item of itemsWithWarehouse) {
-                if (item.flash_sale_item_id && item.gia_flash_sale) {
-                    console.log('🔥 Recording flash sale order - variant:', item.variant_id, 'flash_sale_item:', item.flash_sale_item_id, 'quantity:', item.so_luong);
-                    
-                    // Kiểm tra user đã mua bao nhiêu flash_sale_item này rồi
-                    const checkPurchasedRequest = new sql.Request(transaction);
-                    const purchasedResult = await checkPurchasedRequest
-                        .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
-                        .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
-                        .query(`
-                            SELECT ISNULL(SUM(so_luong), 0) as da_mua
-                            FROM flash_sale_orders
-                            WHERE flash_sale_item_id = @flash_sale_item_id
-                              AND nguoi_dung_id = @nguoi_dung_id
-                        `);
-                    
-                    const daMua = purchasedResult.recordset[0].da_mua || 0;
-                    const gioiHanMua = item.gioi_han_mua || 999;
-                    
-                    // Tính số lượng còn được phép mua
-                    const conDuocMua = Math.max(0, gioiHanMua - daMua);
-                    
-                    // Tính số lượng thực tế được hưởng giá flash sale (không vượt số còn được mua)
-                    const soLuongFlashSale = Math.min(item.so_luong, conDuocMua);
-                    
-                    console.log('  - Giới hạn mua:', gioiHanMua, '| Đã mua:', daMua, '| Còn được mua:', conDuocMua, '→ Số lượng flash sale:', soLuongFlashSale);
-                    
-                    // Nếu đã vượt giới hạn mua rồi, không insert vào flash_sale_orders
-                    if (soLuongFlashSale <= 0) {
-                        console.log('⚠️  User đã đạt giới hạn mua flash sale item này!');
-                        continue;
+            } // End of site items loop
+        } // End of site origins loop
+            
+            // 7.5. Insert flash_sale_orders for flash sale items (for all orders)
+            console.log('Step 4: Recording flash sale orders for all split orders...');
+            for (const orderInfo of createdOrders) {
+                const { orderId, siteOrigin, items: siteItems } = orderInfo;
+                
+                for (const item of siteItems) {
+                    if (item.flash_sale_item_id && item.gia_flash_sale) {
+                        console.log('🔥 Recording flash sale order - variant:', item.variant_id, 'flash_sale_item:', item.flash_sale_item_id, 'quantity:', item.so_luong, 'for order:', orderId);
+                        
+                        // Kiểm tra user đã mua bao nhiêu flash_sale_item này rồi
+                        const checkPurchasedRequest = new sql.Request(transaction);
+                        const purchasedResult = await checkPurchasedRequest
+                            .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
+                            .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                            .query(`
+                                SELECT ISNULL(SUM(so_luong), 0) as da_mua
+                                FROM flash_sale_orders
+                                WHERE flash_sale_item_id = @flash_sale_item_id
+                                  AND nguoi_dung_id = @nguoi_dung_id
+                            `);
+                        
+                        const daMua = purchasedResult.recordset[0].da_mua || 0;
+                        const gioiHanMua = item.gioi_han_mua || 999;
+                        
+                        // Tính số lượng còn được phép mua
+                        const conDuocMua = Math.max(0, gioiHanMua - daMua);
+                        
+                        // Tính số lượng thực tế được hưởng giá flash sale (không vượt số còn được mua)
+                        const soLuongFlashSale = Math.min(item.so_luong, conDuocMua);
+                        
+                        console.log('  - Giới hạn mua:', gioiHanMua, '| Đã mua:', daMua, '| Còn được mua:', conDuocMua, '→ Số lượng flash sale:', soLuongFlashSale);
+                        
+                        // Nếu đã vượt giới hạn mua rồi, không insert vào flash_sale_orders
+                        if (soLuongFlashSale <= 0) {
+                            console.log('⚠️  User đã đạt giới hạn mua flash sale item này!');
+                            continue;
+                        }
+                        
+                        // Chỉ lưu số lượng được hưởng giá flash sale (không tính phần vượt giới hạn)
+                        const flashSaleOrderRequest = new sql.Request(transaction);
+                        await flashSaleOrderRequest
+                            .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
+                            .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                            .input('don_hang_id', sql.UniqueIdentifier, orderId)
+                            .input('so_luong', sql.Int, soLuongFlashSale)
+                            .input('gia_flash_sale', sql.Decimal(15, 2), item.gia_flash_sale)
+                            .query(`
+                                INSERT INTO flash_sale_orders (
+                                    flash_sale_item_id, nguoi_dung_id, don_hang_id, 
+                                    so_luong, gia_flash_sale, ngay_mua
+                                )
+                                VALUES (
+                                    @flash_sale_item_id, @nguoi_dung_id, @don_hang_id,
+                                    @so_luong, @gia_flash_sale, GETDATE()
+                                )
+                            `);
+                        
+                        // Cập nhật số lượng đã bán trong flash_sale_items
+                        const updateFlashSaleItemRequest = new sql.Request(transaction);
+                        await updateFlashSaleItemRequest
+                            .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
+                            .input('so_luong', sql.Int, soLuongFlashSale)
+                            .query(`
+                                UPDATE flash_sale_items
+                                SET da_ban = da_ban + @so_luong,
+                                    ngay_cap_nhat = GETDATE()
+                                WHERE id = @flash_sale_item_id
+                            `);
+                        
+                        console.log('✅ Flash sale order recorded:', soLuongFlashSale, 'items at', item.gia_flash_sale, '₫');
+                    } else {
+                        console.log('⏭️  Skip item (not flash sale) - variant:', item.variant_id);
                     }
-                    
-                    // Chỉ lưu số lượng được hưởng giá flash sale (không tính phần vượt giới hạn)
-                    const flashSaleOrderRequest = new sql.Request(transaction);
-                    await flashSaleOrderRequest
-                        .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
-                        .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
-                        .input('don_hang_id', sql.UniqueIdentifier, orderId)
-                        .input('so_luong', sql.Int, soLuongFlashSale)
-                        .input('gia_flash_sale', sql.Decimal(15, 2), item.gia_flash_sale)
-                        .query(`
-                            INSERT INTO flash_sale_orders (
-                                flash_sale_item_id, nguoi_dung_id, don_hang_id, 
-                                so_luong, gia_flash_sale, ngay_mua
-                            )
-                            VALUES (
-                                @flash_sale_item_id, @nguoi_dung_id, @don_hang_id,
-                                @so_luong, @gia_flash_sale, GETDATE()
-                            )
-                        `);
-                    
-                    // Cập nhật số lượng đã bán trong flash_sale_items
-                    const updateFlashSaleItemRequest = new sql.Request(transaction);
-                    await updateFlashSaleItemRequest
-                        .input('flash_sale_item_id', sql.UniqueIdentifier, item.flash_sale_item_id)
-                        .input('so_luong', sql.Int, soLuongFlashSale)
-                        .query(`
-                            UPDATE flash_sale_items
-                            SET da_ban = da_ban + @so_luong,
-                                ngay_cap_nhat = GETDATE()
-                            WHERE id = @flash_sale_item_id
-                        `);
-                    
-                    console.log('✅ Flash sale order recorded:', soLuongFlashSale, 'items at', item.gia_flash_sale, '₫');
-                } else {
-                    console.log('⏭️  Skip item (not flash sale) - variant:', item.variant_id);
                 }
             }
 
-            // 8. Update voucher usage
+            // 8. Update voucher usage (chỉ cần update 1 lần cho tất cả orders)
             if (voucher_id) {
                 console.log('🎫 Updating voucher usage:', voucher_id);
                 
@@ -11164,23 +11329,25 @@ app.post('/api/orders', async (req, res) => {
                         WHERE id = @voucher_id
                     `);
 
-                // Add to used_vouchers (not voucher_usage_history)
-                const usageRequest = new sql.Request(transaction);
-                await usageRequest
-                    .input('voucher_id', sql.UniqueIdentifier, voucher_id)
-                    .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
-                    .input('don_hang_id', sql.UniqueIdentifier, orderId)
-                    .input('gia_tri_giam', sql.Decimal(18, 2), gia_tri_giam_voucher || 0)
+                // Add to used_vouchers for each order
+                for (const orderInfo of createdOrders) {
+                    const usageRequest = new sql.Request(transaction);
+                    await usageRequest
+                        .input('voucher_id', sql.UniqueIdentifier, voucher_id)
+                        .input('nguoi_dung_id', sql.UniqueIdentifier, userId)
+                        .input('don_hang_id', sql.UniqueIdentifier, orderInfo.orderId)
+                        .input('gia_tri_giam', sql.Decimal(18, 2), gia_tri_giam_voucher || 0)
                     .query(`
-                        INSERT INTO used_vouchers (
-                            voucher_id, nguoi_dung_id, don_hang_id, gia_tri_giam, ngay_su_dung
-                        )
-                        VALUES (
-                            @voucher_id, @nguoi_dung_id, @don_hang_id, @gia_tri_giam, GETDATE()
-                        )
-                    `);
+                            INSERT INTO used_vouchers (
+                                voucher_id, nguoi_dung_id, don_hang_id, gia_tri_giam, ngay_su_dung
+                            )
+                            VALUES (
+                                @voucher_id, @nguoi_dung_id, @don_hang_id, @gia_tri_giam, GETDATE()
+                            )
+                        `);
+                }
                 
-                console.log('✅ Voucher usage recorded');
+                console.log('✅ Voucher usage recorded for all orders');
             }
 
             // Commit transaction
@@ -11188,12 +11355,20 @@ app.post('/api/orders', async (req, res) => {
             await transaction.commit();
             console.log('✅ Transaction committed successfully!');
 
+            // Return all created orders
             res.json({
                 success: true,
-                message: 'Đặt hàng thành công',
+                message: is_split_order 
+                    ? `Đặt hàng thành công! Đơn hàng của bạn được chia thành ${createdOrders.length} đơn từ các khu vực khác nhau.`
+                    : 'Đặt hàng thành công',
                 data: {
-                    orderId: orderId,
-                    orderCode: orderCode
+                    orderCode: ma_don_hang, // Mã đơn hàng chung
+                    isSplitOrder: is_split_order,
+                    orders: createdOrders.map(o => ({
+                        orderId: o.orderId,
+                        siteOrigin: o.siteOrigin,
+                        itemCount: o.items.length
+                    }))
                 }
             });
 
@@ -11235,7 +11410,7 @@ app.get('/api/orders', async (req, res) => {
             });
         }
 
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('userId', sql.UniqueIdentifier, userId)
             .query(`
@@ -11244,6 +11419,8 @@ app.get('/api/orders', async (req, res) => {
                     o.ma_don_hang,
                     o.nguoi_dung_id,
                     o.vung_don_hang,
+                    o.site_processed,
+                    o.is_split_order,
                     o.tong_tien_hang,
                     o.phi_van_chuyen,
                     o.gia_tri_giam_voucher,
@@ -11256,51 +11433,104 @@ app.get('/api/orders', async (req, res) => {
                 ORDER BY o.ngay_tao DESC
             `);
 
-        // Get items for each order
-        const orders = result.recordset;
-        for (let order of orders) {
-            const itemsRequest = new sql.Request();
-            const itemsResult = await itemsRequest
-                .input('orderId', sql.UniqueIdentifier, order.id)
-                .query(`
-                    SELECT 
-                        od.id,
-                        od.variant_id,
-                        od.so_luong,
-                        od.don_gia,
-                        od.thanh_tien,
-                        pv.ten_hien_thi as ten_bien_the,
-                        p.ten_san_pham
-                    FROM order_details od
-                    LEFT JOIN product_variants pv ON od.variant_id = pv.id
-                    LEFT JOIN products p ON pv.san_pham_id = p.id
-                    WHERE od.don_hang_id = @orderId
-                `);
-
-            // Get product images from MongoDB
-            for (let item of itemsResult.recordset) {
-                try {
-                    const productDetail = await DataModel.Mongo.ProductDetail.findOne({
-                        'variants.variant_combinations.variant_id': item.variant_id
-                    }).lean();
-
-                    if (productDetail && productDetail.variants) {
-                        const variant = productDetail.variants.variant_combinations.find(
-                            v => v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
-                        );
-                        if (variant && variant.images && variant.images.length > 0) {
-                            item.hinh_anh = variant.images[0];
-                        } else if (productDetail.images && productDetail.images.length > 0) {
-                            item.hinh_anh = productDetail.images[0];
-                        }
-                    }
-                } catch (err) {
-                    console.error('Error fetching image:', err);
+        const allOrders = result.recordset;
+        
+        // 🔥 Group orders by ma_don_hang (gộp split orders)
+        const ordersMap = new Map();
+        
+        for (let order of allOrders) {
+            const ma_don_hang = order.ma_don_hang;
+            
+            if (!ordersMap.has(ma_don_hang)) {
+                // First order with this ma_don_hang - use as base
+                ordersMap.set(ma_don_hang, {
+                    id: order.id, // Use first order's ID for detail link
+                    ma_don_hang: order.ma_don_hang,
+                    nguoi_dung_id: order.nguoi_dung_id,
+                    vung_don_hang: order.vung_don_hang,
+                    is_split_order: order.is_split_order,
+                    tong_tien_hang: order.tong_tien_hang,
+                    phi_van_chuyen: order.phi_van_chuyen,
+                    gia_tri_giam_voucher: order.gia_tri_giam_voucher,
+                    tong_thanh_toan: order.tong_thanh_toan,
+                    trang_thai: order.trang_thai,
+                    ngay_tao: order.ngay_tao,
+                    ngay_cap_nhat: order.ngay_cap_nhat,
+                    order_ids: [order.id], // Track all order IDs
+                    items: []
+                });
+            } else {
+                // Split order - merge totals
+                const merged = ordersMap.get(ma_don_hang);
+                merged.tong_tien_hang += order.tong_tien_hang;
+                merged.phi_van_chuyen += order.phi_van_chuyen;
+                merged.gia_tri_giam_voucher += order.gia_tri_giam_voucher;
+                merged.tong_thanh_toan += order.tong_thanh_toan;
+                merged.order_ids.push(order.id);
+                
+                // Update status to worst case (cho_xac_nhan < dang_xu_ly < dang_giao < hoan_thanh/huy)
+                const statusPriority = {
+                    'cho_xac_nhan': 1,
+                    'dang_xu_ly': 2,
+                    'dang_giao': 3,
+                    'hoan_thanh': 4,
+                    'huy': 0
+                };
+                if (statusPriority[order.trang_thai] < statusPriority[merged.trang_thai]) {
+                    merged.trang_thai = order.trang_thai;
                 }
             }
-
-            order.items = itemsResult.recordset;
         }
+        
+        // Get items for all orders and merge
+        for (let [ma_don_hang, mergedOrder] of ordersMap) {
+            for (let orderId of mergedOrder.order_ids) {
+                const itemsRequest = new sql.Request(db.connectionPools.default);
+                const itemsResult = await itemsRequest
+                    .input('orderId', sql.UniqueIdentifier, orderId)
+                    .query(`
+                        SELECT 
+                            od.id,
+                            od.variant_id,
+                            od.so_luong,
+                            od.don_gia,
+                            od.thanh_tien,
+                            pv.ten_hien_thi as ten_bien_the,
+                            p.ten_san_pham
+                        FROM order_details od
+                        LEFT JOIN product_variants pv ON od.variant_id = pv.id
+                        LEFT JOIN products p ON pv.san_pham_id = p.id
+                        WHERE od.don_hang_id = @orderId
+                    `);
+
+                // Get product images from MongoDB
+                for (let item of itemsResult.recordset) {
+                    try {
+                        const productDetail = await DataModel.Mongo.ProductDetail.findOne({
+                            'variants.variant_combinations.variant_id': item.variant_id
+                        }).lean();
+
+                        if (productDetail && productDetail.variants) {
+                            const variant = productDetail.variants.variant_combinations.find(
+                                v => v.variant_id && v.variant_id.toLowerCase() === item.variant_id.toLowerCase()
+                            );
+                            if (variant && variant.images && variant.images.length > 0) {
+                                item.hinh_anh = variant.images[0];
+                            } else if (productDetail.images && productDetail.images.length > 0) {
+                                item.hinh_anh = productDetail.images[0];
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Error fetching image:', err);
+                    }
+                }
+
+                mergedOrder.items.push(...itemsResult.recordset);
+            }
+        }
+
+        // Convert map to array
+        const orders = Array.from(ordersMap.values());
 
         res.json({
             success: true,
@@ -11321,7 +11551,7 @@ app.get('/api/orders/:orderId', async (req, res) => {
     try {
         const { orderId } = req.params;
 
-        const orderRequest = new sql.Request();
+        const orderRequest = new sql.Request(db.connectionPools.default);
         const orderResult = await orderRequest
             .input('orderId', sql.UniqueIdentifier, orderId)
             .query(`
@@ -11359,22 +11589,64 @@ app.get('/api/orders/:orderId', async (req, res) => {
         }
 
         const order = orderResult.recordset[0];
+        
+        // 🔥 Check if this is a split order - find all orders with same ma_don_hang
+        let allOrderIds = [orderId];
+        let mergedOrder = { ...order };
+        
+        if (order.is_split_order === 1 || order.is_split_order === true) {
+            const splitOrdersRequest = new sql.Request(db.connectionPools.default);
+            const splitOrdersResult = await splitOrdersRequest
+                .input('ma_don_hang', sql.NVarChar(50), order.ma_don_hang)
+                .query(`
+                    SELECT 
+                        o.*,
+                        sm.ten_phuong_thuc,
+                        smr.chi_phi_van_chuyen
+                    FROM orders o
+                    LEFT JOIN shipping_method_regions smr ON o.shipping_method_region_id = smr.id
+                    LEFT JOIN shipping_methods sm ON smr.shipping_method_id = sm.id
+                    WHERE o.ma_don_hang = @ma_don_hang
+                `);
+            
+            allOrderIds = splitOrdersResult.recordset.map(o => o.id);
+            
+            // Merge totals from all split orders
+            mergedOrder.tong_tien_hang = 0;
+            mergedOrder.phi_van_chuyen = 0;
+            mergedOrder.gia_tri_giam_voucher = 0;
+            mergedOrder.tong_thanh_toan = 0;
+            
+            for (let splitOrder of splitOrdersResult.recordset) {
+                mergedOrder.tong_tien_hang += splitOrder.tong_tien_hang || 0;
+                mergedOrder.phi_van_chuyen += splitOrder.phi_van_chuyen || 0;
+                mergedOrder.gia_tri_giam_voucher += splitOrder.gia_tri_giam_voucher || 0;
+                mergedOrder.tong_thanh_toan += splitOrder.tong_thanh_toan || 0;
+            }
+            
+            console.log(`✅ Split order detected: ${order.ma_don_hang}, merged ${allOrderIds.length} orders`);
+        }
 
-        // Lấy items
-        const itemsRequest = new sql.Request();
-        const itemsResult = await itemsRequest
-            .input('orderId', sql.UniqueIdentifier, orderId)
-            .query(`
-                SELECT 
-                    od.*
-                FROM order_details od
-                WHERE od.don_hang_id = @orderId
-            `);
+        // Lấy items từ TẤT CẢ orders (nếu là split order)
+        let allItems = [];
+        for (let currentOrderId of allOrderIds) {
+            const itemsRequest = new sql.Request(db.connectionPools.default);
+            const itemsResult = await itemsRequest
+                .input('orderId', sql.UniqueIdentifier, currentOrderId)
+                .query(`
+                    SELECT 
+                        od.*
+                    FROM order_details od
+                    WHERE od.don_hang_id = @orderId
+                `);
+
+            allItems.push(...itemsResult.recordset);
+        }
 
         // Lấy thông tin variant và product từ SQL
-        const itemsWithDetails = await Promise.all(itemsResult.recordset.map(async (item) => {
+        const itemsWithDetails = await Promise.all(allItems.map(async (item) => {
             // Get variant and product info from SQL
-            const variantRequest = new sql.Request();
+            const variantRequest = new sql.Request(db.connectionPools.default);
             const variantResult = await variantRequest
                 .input('variantId', sql.UniqueIdentifier, item.variant_id)
                 .query(`
@@ -11428,8 +11700,8 @@ app.get('/api/orders/:orderId', async (req, res) => {
 
         res.json({
             success: true,
-            order: orderResult.recordset[0],
-            items: itemsWithDetails
+            order: mergedOrder, // ✅ Use merged order with combined totals
+            items: itemsWithDetails // ✅ All items from all split orders
         });
 
     } catch (error) {
@@ -11447,7 +11719,7 @@ app.put('/api/orders/:orderId/cancel', async (req, res) => {
         const { orderId } = req.params;
 
         // Check if order exists and can be cancelled
-        const checkRequest = new sql.Request();
+        const checkRequest = new sql.Request(db.connectionPools.default);
         const checkResult = await checkRequest
             .input('orderId', sql.UniqueIdentifier, orderId)
             .query(`
@@ -11472,7 +11744,7 @@ app.put('/api/orders/:orderId/cancel', async (req, res) => {
         }
 
         // Update order status to cancelled
-        const updateRequest = new sql.Request();
+        const updateRequest = new sql.Request(db.connectionPools.default);
         await updateRequest
             .input('orderId', sql.UniqueIdentifier, orderId)
             .query(`
@@ -11507,7 +11779,7 @@ app.get('/api/warehouses/by-region/:regionId', async (req, res) => {
     try {
         const { regionId } = req.params;
 
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('regionId', sql.NVarChar, regionId)
             .query(`
@@ -11519,7 +11791,7 @@ app.get('/api/warehouses/by-region/:regionId', async (req, res) => {
 
         if (result.recordset.length === 0) {
             // Fallback: lấy warehouse đầu tiên nếu không tìm thấy theo vùng
-            const fallbackResult = await new sql.Request().query(`
+            const fallbackResult = await new sql.Request(db.connectionPools.default).query(`
                 SELECT TOP 1 id, ten_kho, vung_id
                 FROM warehouses
                 WHERE trang_thai = 1
@@ -11551,7 +11823,7 @@ app.get('/api/shipping-methods/by-region/:regionId', async (req, res) => {
     try {
         const { regionId } = req.params;
 
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         const result = await request
             .input('regionId', sql.NVarChar, regionId)
             .query(`
@@ -11571,7 +11843,7 @@ app.get('/api/shipping-methods/by-region/:regionId', async (req, res) => {
 
         if (result.recordset.length === 0) {
             // Fallback: lấy phương thức đầu tiên
-            const fallbackResult = await new sql.Request().query(`
+            const fallbackResult = await new sql.Request(db.connectionPools.default).query(`
                 SELECT TOP 1 
                     smr.id,
                     smr.shipping_method_id,
@@ -11611,7 +11883,7 @@ app.get('/api/shipping-methods/by-region/:regionId', async (req, res) => {
 // Get all regions
 app.get('/api/regions', async (req, res) => {
     try {
-        const result = await new sql.Request().query(`
+        const result = await new sql.Request(db.connectionPools.default).query(`
             SELECT ma_vung, ten_vung, mo_ta, trang_thai
             FROM regions
             WHERE trang_thai = 1
@@ -11633,7 +11905,7 @@ app.get('/api/regions', async (req, res) => {
 // Get all shipping methods
 app.get('/api/shipping-methods', async (req, res) => {
     try {
-        const result = await new sql.Request().query(`
+        const result = await new sql.Request(db.connectionPools.default).query(`
             SELECT 
                 id,
                 ten_phuong_thuc,
@@ -11658,7 +11930,7 @@ app.get('/api/shipping-methods/:id', async (req, res) => {
     try {
         const { id } = req.params;
         
-        const result = await new sql.Request()
+        const result = await new sql.Request(db.connectionPools.default)
             .input('id', sql.UniqueIdentifier, id)
             .query(`
                 SELECT 
@@ -11710,7 +11982,7 @@ app.post('/api/shipping-methods', async (req, res) => {
             trangThaiBit = 0;
         }
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         await request
             .input('ten_phuong_thuc', sql.NVarChar(100), ten_phuong_thuc)
             .input('mo_ta', sql.NVarChar(500), mo_ta || null)
@@ -11763,7 +12035,7 @@ app.put('/api/shipping-methods/:id', async (req, res) => {
             trangThaiBit = 0;
         }
         
-        const request = new sql.Request();
+        const request = new sql.Request(db.connectionPools.default);
         
         const result = await request
             .input('id', sql.UniqueIdentifier, id)
@@ -11809,7 +12081,7 @@ app.delete('/api/shipping-methods/:id', async (req, res) => {
         const { id } = req.params;
         
         // Check if method is being used in orders
-        const checkResult = await new sql.Request()
+        const checkResult = await new sql.Request(db.connectionPools.default)
             .input('id', sql.UniqueIdentifier, id)
             .query(`
                 SELECT COUNT(*) as count
@@ -11825,7 +12097,7 @@ app.delete('/api/shipping-methods/:id', async (req, res) => {
             });
         }
         
-        const result = await new sql.Request()
+        const result = await new sql.Request(db.connectionPools.default)
             .input('id', sql.UniqueIdentifier, id)
             .query(`
                 DELETE FROM shipping_methods
@@ -11854,7 +12126,7 @@ app.get('/api/shipping-methods/:id/regions', async (req, res) => {
     try {
         const { id } = req.params;
         
-        const result = await new sql.Request()
+        const result = await new sql.Request(db.connectionPools.default)
             .input('id', sql.UniqueIdentifier, id)
             .query(`
                 SELECT 
@@ -11886,7 +12158,7 @@ app.get('/api/shipping-methods/:id/regions', async (req, res) => {
 });
 
 // Get all shipping method regions
-app.get('/api/shipping-method-regions', async (req, res) => {
+app.get('/api/shipping-method-regions', injectPoolForAdmin, async (req, res) => {
     try {
         const { regionId, methodId } = req.query;
         
@@ -11908,7 +12180,7 @@ app.get('/api/shipping-method-regions', async (req, res) => {
             WHERE 1=1
         `;
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         
         if (regionId) {
             query += ` AND smr.region_id = @regionId`;
@@ -11938,7 +12210,7 @@ app.get('/api/shipping-method-regions', async (req, res) => {
 });
 
 // Create shipping method region
-app.post('/api/shipping-method-regions', async (req, res) => {
+app.post('/api/shipping-method-regions', requireAdmin, async (req, res) => {
     try {
         const { shipping_method_id, region_id, chi_phi_van_chuyen, thoi_gian_giao_du_kien, trang_thai } = req.body;
         
@@ -11956,7 +12228,7 @@ app.post('/api/shipping-method-regions', async (req, res) => {
         }
         
         // Check if combination already exists
-        const checkResult = await new sql.Request()
+        const checkResult = await new sql.Request(req.dbPool)
             .input('shipping_method_id', sql.UniqueIdentifier, shipping_method_id)
             .input('region_id', sql.NVarChar(10), region_id)
             .query(`
@@ -11968,7 +12240,7 @@ app.post('/api/shipping-method-regions', async (req, res) => {
             return res.status(400).json({ message: 'Giá cho vùng này đã tồn tại' });
         }
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         await request
             .input('shipping_method_id', sql.UniqueIdentifier, shipping_method_id)
             .input('region_id', sql.NVarChar(10), region_id)
@@ -11992,7 +12264,7 @@ app.post('/api/shipping-method-regions', async (req, res) => {
 });
 
 // Update shipping method region
-app.put('/api/shipping-method-regions/:id', async (req, res) => {
+app.put('/api/shipping-method-regions/:id', requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { gia_van_chuyen, chi_phi_van_chuyen, thoi_gian_du_kien, thoi_gian_giao_du_kien, trang_thai } = req.body;
@@ -12025,7 +12297,7 @@ app.put('/api/shipping-method-regions/:id', async (req, res) => {
             }
         }
         
-        const request = new sql.Request();
+        const request = new sql.Request(req.dbPool);
         
         const result = await request
             .input('id', sql.UniqueIdentifier, id)
@@ -12064,12 +12336,12 @@ app.put('/api/shipping-method-regions/:id', async (req, res) => {
 });
 
 // Delete shipping method region
-app.delete('/api/shipping-method-regions/:id', async (req, res) => {
+app.delete('/api/shipping-method-regions/:id', requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         
         // Check if being used in orders
-        const checkResult = await new sql.Request()
+        const checkResult = await new sql.Request(req.dbPool)
             .input('id', sql.UniqueIdentifier, id)
             .query(`
                 SELECT COUNT(*) as count
@@ -12083,7 +12355,7 @@ app.delete('/api/shipping-method-regions/:id', async (req, res) => {
             });
         }
         
-        const result = await new sql.Request()
+        const result = await new sql.Request(req.dbPool)
             .input('id', sql.UniqueIdentifier, id)
             .query(`
                 DELETE FROM shipping_method_regions

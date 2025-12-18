@@ -1,5 +1,20 @@
 import mongoose, { model } from "mongoose";
 import sql from 'mssql';
+import db from '../../server.js';
+
+// ✅ Helper để lấy connection pool (default hoặc từ request)
+function getPool(requestPool) {
+  return requestPool || db.connectionPools?.default;
+}
+
+// ✅ Helper để tạo Request với pool đúng
+function createRequest(pool) {
+  const activePool = pool || db.connectionPools?.default || sql.globalConnectionPool;
+  if (!activePool) {
+    throw new Error('No SQL connection pool available');
+  }
+  return new sql.Request(activePool);
+}
 
 // ==================== MONGODB MODELS ====================
 
@@ -184,7 +199,7 @@ const Data_VoucherDetail_Model = mongoose.model('VoucherDetail', voucherDetailSc
 class SQLBrandModel {
   static async findAll() {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request.query(`
         SELECT * FROM brands 
         WHERE trang_thai = 1
@@ -197,7 +212,7 @@ class SQLBrandModel {
   }
   static async findOne(conditions = {}) {
       try {
-          const request = new sql.Request();
+          const request = createRequest();
           let whereClause = '';
           const params = [];
 
@@ -243,7 +258,7 @@ class SQLBrandModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query('SELECT * FROM brands WHERE id = @id');
@@ -256,7 +271,7 @@ class SQLBrandModel {
 
   static async create(brandData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       console.log('🔄 Creating brand with data:', brandData);
       
@@ -293,7 +308,7 @@ class SQLBrandModel {
 
   static async update(brandId, updateData) {
       try {
-          const request = new sql.Request();
+          const request = createRequest();
           
           // Thêm các parameters
           request.input('id', sql.UniqueIdentifier, brandId);
@@ -349,7 +364,7 @@ class SQLBrandModel {
 
   static async destroy(conditions = {}) {
     try {
-        const request = new sql.Request();
+        const request = createRequest();
         let whereClause = '';
         const params = [];
 
@@ -395,7 +410,7 @@ class SQLBrandModel {
             WHERE thuong_hieu_id = @brandId AND trang_thai = 1
         `;
 
-        const productRequest = new sql.Request();
+        const productRequest = createRequest();
         productRequest.input('brandId', sql.UniqueIdentifier, brandId);
         
         const productResult = await productRequest.query(checkProductsQuery);
@@ -445,7 +460,7 @@ class SQLBrandModel {
 class SQLCategoryModel {
     static async findAll() {
         try {
-            const request = new sql.Request();
+            const request = createRequest();
             const result = await request.query(`
                 SELECT * FROM categories 
                 WHERE trang_thai = 1 
@@ -460,7 +475,7 @@ class SQLCategoryModel {
 
     static async findOne(conditions = {}) {
         try {
-            const request = new sql.Request();
+            const request = createRequest();
             let whereClause = '';
             const params = [];
 
@@ -505,7 +520,7 @@ class SQLCategoryModel {
 
     static async findById(id) {
         try {
-            const request = new sql.Request();
+            const request = createRequest();
             const result = await request
                 .input('id', sql.UniqueIdentifier, id)
                 .query('SELECT * FROM categories WHERE id = @id');
@@ -518,7 +533,7 @@ class SQLCategoryModel {
 
     static async create(categoryData) {
         try {
-            const request = new sql.Request();
+            const request = createRequest();
             
             // Insert without OUTPUT clause to avoid trigger conflict
             const insertQuery = `
@@ -551,7 +566,7 @@ class SQLCategoryModel {
 
     static async update(categoryId, updateData) {
         try {
-            const request = new sql.Request();
+            const request = createRequest();
             
             request.input('id', sql.UniqueIdentifier, categoryId);
             request.input('ten_danh_muc', sql.NVarChar(100), updateData.ten_danh_muc);
@@ -605,7 +620,7 @@ class SQLCategoryModel {
 
     static async destroy(conditions = {}) {
       try {
-          const request = new sql.Request();
+          const request = createRequest();
           let whereClause = '';
           const params = [];
 
@@ -650,7 +665,7 @@ class SQLCategoryModel {
               WHERE danh_muc_id = @categoryId AND trang_thai = 1
           `;
 
-          const productRequest = new sql.Request();
+          const productRequest = createRequest();
           productRequest.input('categoryId', sql.UniqueIdentifier, categoryId);
           
           const productResult = await productRequest.query(checkProductsQuery);
@@ -667,7 +682,7 @@ class SQLCategoryModel {
               WHERE danh_muc_cha_id = @categoryId AND trang_thai = 1
           `;
 
-          const childrenRequest = new sql.Request();
+          const childrenRequest = createRequest();
           childrenRequest.input('categoryId', sql.UniqueIdentifier, categoryId);
           
           const childrenResult = await childrenRequest.query(checkChildrenQuery);
@@ -682,7 +697,7 @@ class SQLCategoryModel {
                   ORDER BY thu_tu ASC
               `;
               
-              const childrenDetailsRequest = new sql.Request();
+              const childrenDetailsRequest = createRequest();
               childrenDetailsRequest.input('categoryId', sql.UniqueIdentifier, categoryId);
               const childrenDetails = await childrenDetailsRequest.query(childrenDetailsQuery);
               
@@ -729,9 +744,9 @@ class SQLCategoryModel {
 // Model cho Product trong SQL Server - CẬP NHẬT CHO SCHEMA MỚI
 class SQLProductModel {
   // Lấy tất cả products với variants
-  static async findAll() {
+  static async findAll(pool = null) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       
       // Lấy products với thông tin category và brand
       const productsResult = await request.query(`
@@ -827,7 +842,7 @@ class SQLProductModel {
   // Lấy product theo ID với variants
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       // Lấy product info
       const productResult = await request
@@ -906,7 +921,7 @@ class SQLProductModel {
   // Lấy products theo category
   static async findByCategory(categoryId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       const productsResult = await request
         .input('categoryId', sql.UniqueIdentifier, categoryId)
@@ -993,7 +1008,7 @@ class SQLProductModel {
   // Tạo product mới
   static async create(productData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('ma_san_pham', sql.NVarChar(100), productData.ma_san_pham)
         .input('ten_san_pham', sql.NVarChar(255), productData.ten_san_pham)
@@ -1033,7 +1048,7 @@ class SQLProductModel {
       console.log('🔍 Updating Product ID:', id);
       console.log('📦 Product Data:', JSON.stringify(productData, null, 2));
       
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       
       const setClauses = [];
@@ -1091,7 +1106,7 @@ class SQLProductModel {
   // Xóa product (cascade delete variants)
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       // Xóa variants trước
       await request
@@ -1116,7 +1131,7 @@ class SQLProductVariantModel {
   // Lấy tất cả variants của một product
   static async findByProductId(productId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('san_pham_id', sql.UniqueIdentifier, productId)
         .query(`
@@ -1134,7 +1149,7 @@ class SQLProductVariantModel {
   // Lấy variant theo ID
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -1151,7 +1166,7 @@ class SQLProductVariantModel {
   // Tìm variant theo SKU
   static async findBySKU(ma_sku) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('ma_sku', sql.NVarChar(100), ma_sku)
         .query(`
@@ -1170,7 +1185,7 @@ class SQLProductVariantModel {
   // Tạo variant mới
   static async create(variantData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('san_pham_id', sql.UniqueIdentifier, variantData.san_pham_id)
         .input('ma_sku', sql.NVarChar(100), variantData.ma_sku)
@@ -1225,7 +1240,7 @@ class SQLProductVariantModel {
   // Cập nhật variant
   static async update(variantData, id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       
       const setClauses = [];
@@ -1294,7 +1309,7 @@ class SQLProductVariantModel {
   // Xóa variant
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query('DELETE FROM product_variants WHERE id = @id');
@@ -1309,7 +1324,7 @@ class SQLProductVariantModel {
   // Lấy khoảng giá (min/max) của một product
   static async getPriceRange(productId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('san_pham_id', sql.UniqueIdentifier, productId)
         .query(`
@@ -1332,7 +1347,7 @@ class SQLProductVariantModel {
   // Kiểm tra SKU có tồn tại không (để tránh duplicate)
   static async checkSKUExists(ma_sku, excludeId = null) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('ma_sku', sql.NVarChar(100), ma_sku);
       
       let query = 'SELECT COUNT(*) as count FROM product_variants WHERE ma_sku = @ma_sku';
@@ -1353,9 +1368,9 @@ class SQLProductVariantModel {
 
 // Model cho Flash Sale trong SQL Server
 class SQLFlashSaleModel {
-  static async findAll(filters = {}) {
+  static async findAll(pool = null, filters = {}) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       let whereClause = 'WHERE 1=1';
       
       if (filters.trang_thai) {
@@ -1390,7 +1405,7 @@ class SQLFlashSaleModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -1412,7 +1427,7 @@ class SQLFlashSaleModel {
 
   static async create(flashSaleData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request
         .input('ten_flash_sale', sql.NVarChar(255), flashSaleData.ten_flash_sale)
         .input('mo_ta', sql.NVarChar(500), flashSaleData.mo_ta || null)
@@ -1449,7 +1464,7 @@ class SQLFlashSaleModel {
 
   static async update(id, updateData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       
       // Build dynamic UPDATE query
@@ -1513,7 +1528,7 @@ class SQLFlashSaleModel {
 
   static async destroy(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       await request
         .input('id', sql.UniqueIdentifier, id)
         .query('DELETE FROM flash_sales WHERE id = @id');
@@ -1530,7 +1545,7 @@ class SQLFlashSaleItemModel {
   // Lấy flash sale items theo flash_sale_id
   static async findByFlashSaleId(flashSaleId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('flashSaleId', sql.UniqueIdentifier, flashSaleId)
         .query(`
@@ -1559,7 +1574,7 @@ class SQLFlashSaleItemModel {
   // Tìm tất cả flash sale items đang active của 1 sản phẩm (có thể nhiều variants)
   static async findActiveByProductId(productId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('productId', sql.UniqueIdentifier, productId)
         .query(`
@@ -1592,7 +1607,7 @@ class SQLFlashSaleItemModel {
   // Tìm flash sale item theo variant_id cụ thể
   static async findActiveByVariantId(variantId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('variantId', sql.UniqueIdentifier, variantId)
         .query(`
@@ -1620,7 +1635,7 @@ class SQLFlashSaleItemModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query('SELECT * FROM flash_sale_items WHERE id = @id');
@@ -1633,7 +1648,7 @@ class SQLFlashSaleItemModel {
 
   static async create(itemData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       // Chỉ hỗ trợ variant_id (bỏ inventory_id)
       if (!itemData.variant_id) {
@@ -1642,7 +1657,7 @@ class SQLFlashSaleItemModel {
       
       const variantId = itemData.variant_id;
       
-      const request2 = new sql.Request();
+      const request2 = createRequest();
       const result = await request2
         .input('flash_sale_id', sql.UniqueIdentifier, itemData.flash_sale_id)
         .input('variant_id', sql.UniqueIdentifier, variantId)
@@ -1674,7 +1689,7 @@ class SQLFlashSaleItemModel {
 
   static async update(id, updateData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       request.input('gia_goc', sql.Decimal(15, 2), updateData.gia_goc);
       request.input('gia_flash_sale', sql.Decimal(15, 2), updateData.gia_flash_sale);
@@ -1707,7 +1722,7 @@ class SQLFlashSaleItemModel {
 
   static async increaseSold(id, quantity) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .input('quantity', sql.Int, quantity)
@@ -1728,7 +1743,7 @@ class SQLFlashSaleItemModel {
 
   static async destroy(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       await request
         .input('id', sql.UniqueIdentifier, id)
         .query('DELETE FROM flash_sale_items WHERE id = @id');
@@ -1742,7 +1757,7 @@ class SQLFlashSaleItemModel {
   // Delete all items for a flash sale
   static async deleteByFlashSaleId(flashSaleId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       await request
         .input('flashSaleId', sql.UniqueIdentifier, flashSaleId)
         .query('DELETE FROM flash_sale_items WHERE flash_sale_id = @flashSaleId');
@@ -1756,9 +1771,9 @@ class SQLFlashSaleItemModel {
 
 // Model cho Region trong SQL Server
 class SQLRegionModel {
-  static async findAll() {
+  static async findAll(pool = null) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       const result = await request.query(`
         SELECT 
           r.*,
@@ -1775,7 +1790,7 @@ class SQLRegionModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -1794,7 +1809,7 @@ class SQLRegionModel {
 
   static async create(regionData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('ma_vung', sql.NVarChar(50), regionData.ma_vung)
         .input('ten_vung', sql.NVarChar(100), regionData.ten_vung)
@@ -1821,7 +1836,7 @@ class SQLRegionModel {
 
   static async update(id, updateData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       request.input('ma_vung', sql.NVarChar(50), updateData.ma_vung);
       request.input('ten_vung', sql.NVarChar(100), updateData.ten_vung);
@@ -1860,7 +1875,7 @@ class SQLRegionModel {
 
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       // Lấy ma_vung từ id
       const regionResult = await request
@@ -1874,7 +1889,7 @@ class SQLRegionModel {
       const maVung = regionResult.recordset[0].ma_vung;
       
       // Kiểm tra có tỉnh/thành thuộc vùng này không
-      const checkRequest = new sql.Request();
+      const checkRequest = createRequest();
       const checkProvinces = await checkRequest
         .input('ma_vung', sql.NVarChar(10), maVung)
         .query(`
@@ -1888,7 +1903,7 @@ class SQLRegionModel {
       }
 
       // Xóa vùng miền
-      const deleteRequest = new sql.Request();
+      const deleteRequest = createRequest();
       await deleteRequest
         .input('id', sql.UniqueIdentifier, id)
         .query('DELETE FROM regions WHERE id = @id');
@@ -1903,9 +1918,9 @@ class SQLRegionModel {
 
 // Model cho Province trong SQL Server
 class SQLProvinceModel {
-  static async findAll(filters = {}) {
+  static async findAll(pool = null, filters = {}) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       let whereClause = 'WHERE p.trang_thai = 1';
 
       if (filters.vung_id) {
@@ -1938,7 +1953,7 @@ class SQLProvinceModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -1959,7 +1974,7 @@ class SQLProvinceModel {
 
   static async create(provinceData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('ma_tinh', sql.NVarChar(50), provinceData.ma_tinh)
         .input('ten_tinh', sql.NVarChar(100), provinceData.ten_tinh)
@@ -1988,7 +2003,7 @@ class SQLProvinceModel {
 
   static async update(id, updateData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       request.input('ma_tinh', sql.NVarChar(50), updateData.ma_tinh);
       request.input('ten_tinh', sql.NVarChar(100), updateData.ten_tinh);
@@ -2033,7 +2048,7 @@ class SQLProvinceModel {
 
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       // Kiểm tra có phường/xã thuộc tỉnh này không
       const checkWards = await request
@@ -2049,7 +2064,7 @@ class SQLProvinceModel {
       }
 
       // Xóa tỉnh/thành
-      const deleteRequest = new sql.Request();
+      const deleteRequest = createRequest();
       await deleteRequest
         .input('id', sql.UniqueIdentifier, id)
         .query('DELETE FROM provinces WHERE id = @id');
@@ -2064,9 +2079,9 @@ class SQLProvinceModel {
 
 // Model cho Ward trong SQL Server
 class SQLWardModel {
-  static async findAll(filters = {}) {
+  static async findAll(pool = null, filters = {}) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       let whereClause = 'WHERE w.trang_thai = 1';
 
       if (filters.tinh_thanh_id) {
@@ -2105,7 +2120,7 @@ class SQLWardModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -2127,7 +2142,7 @@ class SQLWardModel {
 
   static async create(wardData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('ma_phuong_xa', sql.NVarChar(50), wardData.ma_phuong_xa)
         .input('ten_phuong_xa', sql.NVarChar(100), wardData.ten_phuong_xa)
@@ -2156,7 +2171,7 @@ class SQLWardModel {
 
   static async update(id, updateData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       request.input('id', sql.UniqueIdentifier, id);
       request.input('ma_phuong_xa', sql.NVarChar(50), updateData.ma_phuong_xa);
       request.input('ten_phuong_xa', sql.NVarChar(100), updateData.ten_phuong_xa);
@@ -2202,7 +2217,7 @@ class SQLWardModel {
 
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       await request
         .input('id', sql.UniqueIdentifier, id)
         .query('DELETE FROM wards WHERE id = @id');
@@ -2217,9 +2232,9 @@ class SQLWardModel {
 
 // Model cho User trong SQL Server
 class SQLUserModel {
-  static async findAll(filters = {}) {
+  static async findAll(pool = null, filters = {}) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       let whereConditions = [];
       
       if (filters.status !== undefined) {
@@ -2255,7 +2270,7 @@ class SQLUserModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -2281,7 +2296,7 @@ class SQLUserModel {
 
   static async findByEmail(email) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('email', sql.NVarChar(255), email)
         .query(`
@@ -2306,7 +2321,7 @@ class SQLUserModel {
 
   static async create(userData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       request.input('ho_ten', sql.NVarChar(100), userData.name);
       request.input('email', sql.NVarChar(255), userData.email);
@@ -2340,7 +2355,7 @@ class SQLUserModel {
 
   static async update(id, updateData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       request.input('id', sql.UniqueIdentifier, id);
       request.input('ho_ten', sql.NVarChar(100), updateData.name);
@@ -2405,7 +2420,7 @@ class SQLUserModel {
 
   static async updateStatus(id, status) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .input('status', sql.Bit, status)
@@ -2441,7 +2456,7 @@ class SQLUserModel {
 
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       // Soft delete - set status to 0
       const result = await request
@@ -2467,9 +2482,9 @@ class SQLUserModel {
 // ==================== INVENTORY MODEL ====================
 
 class SQLInventoryModel {
-  static async findAll() {
+  static async findAll(pool = null) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       const result = await request.query(`
         SELECT 
           i.*,
@@ -2497,7 +2512,7 @@ class SQLInventoryModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -2527,7 +2542,7 @@ class SQLInventoryModel {
 
   static async findByProduct(productId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('product_id', sql.UniqueIdentifier, productId)
         .query(`
@@ -2550,7 +2565,7 @@ class SQLInventoryModel {
 
   static async findByVariant(variantId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('variant_id', sql.UniqueIdentifier, variantId)
         .query(`
@@ -2574,7 +2589,7 @@ class SQLInventoryModel {
   // Tìm inventory theo bien_the_san_pham_id (trả về 1 record đầu tiên)
   static async findByVariantId(variantId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('variant_id', sql.UniqueIdentifier, variantId)
         .query(`
@@ -2599,7 +2614,7 @@ class SQLInventoryModel {
   // Tính tổng tồn kho của 1 variant (tổng tất cả kho)
   static async getTotalStockByVariant(variantId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('variant_id', sql.UniqueIdentifier, variantId)
         .query(`
@@ -2618,7 +2633,7 @@ class SQLInventoryModel {
 
   static async getTotalStockByProduct(productId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('product_id', sql.UniqueIdentifier, productId)
         .query(`
@@ -2641,7 +2656,7 @@ class SQLInventoryModel {
   static async syncInventoryForVariant(variantId, siteOrigin, stockQuantity) {
     try {
       // 1. Tìm kho của vùng
-      const warehouseRequest = new sql.Request();
+      const warehouseRequest = createRequest();
       const warehouseResult = await warehouseRequest
         .input('vung_id', sql.NVarChar(10), siteOrigin)
         .query(`
@@ -2656,7 +2671,7 @@ class SQLInventoryModel {
       const warehouseId = warehouseResult.recordset[0].id;
       
       // 2. Kiểm tra inventory đã tồn tại chưa
-      const checkRequest = new sql.Request();
+      const checkRequest = createRequest();
       const checkResult = await checkRequest
         .input('variant_id', sql.UniqueIdentifier, variantId)
         .input('kho_id', sql.UniqueIdentifier, warehouseId)
@@ -2667,7 +2682,7 @@ class SQLInventoryModel {
       if (checkResult.recordset && checkResult.recordset.length > 0) {
         // 3a. Đã tồn tại → UPDATE
         const inventoryId = checkResult.recordset[0].id;
-        const updateRequest = new sql.Request();
+        const updateRequest = createRequest();
         await updateRequest
           .input('id', sql.UniqueIdentifier, inventoryId)
           .input('so_luong_kha_dung', sql.Int, stockQuantity)
@@ -2683,7 +2698,7 @@ class SQLInventoryModel {
         return { action: 'updated', inventoryId };
       } else {
         // 3b. Chưa tồn tại → CREATE
-        const createRequest = new sql.Request();
+        const createRequest = createRequest();
         const createResult = await createRequest
           .input('variant_id', sql.UniqueIdentifier, variantId)
           .input('kho_id', sql.UniqueIdentifier, warehouseId)
@@ -2721,7 +2736,7 @@ class SQLInventoryModel {
 
   static async decreaseStock(inventoryId, quantity, options = {}) {
     try {
-      const request = options.transaction ? new sql.Request(options.transaction) : new sql.Request();
+      const request = options.transaction ? new sql.Request(options.transaction) : createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, inventoryId)
         .input('quantity', sql.Int, quantity)
@@ -2747,7 +2762,7 @@ class SQLInventoryModel {
 
   static async findByWarehouse(warehouseId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('warehouse_id', sql.UniqueIdentifier, warehouseId)
         .query(`
@@ -2771,7 +2786,7 @@ class SQLInventoryModel {
 
   static async countByWarehouse(warehouseId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('warehouse_id', sql.UniqueIdentifier, warehouseId)
         .query(`
@@ -2789,7 +2804,7 @@ class SQLInventoryModel {
 
   static async create(inventoryData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const id = inventoryData.id || sql.UniqueIdentifier.newGuid();
       
       const result = await request
@@ -2834,7 +2849,7 @@ class SQLInventoryModel {
 
   static async update(id, inventoryData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       let updateFields = [];
       
@@ -2901,7 +2916,7 @@ class SQLInventoryModel {
 
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
@@ -2921,9 +2936,9 @@ class SQLInventoryModel {
 // ==================== WAREHOUSE MODEL ====================
 
 class SQLWarehouseModel {
-  static async findAll() {
+  static async findAll(pool = null) {
     try {
-      const request = new sql.Request();
+      const request = createRequest(pool);
       const result = await request.query(`
         SELECT 
           w.id,
@@ -2964,7 +2979,7 @@ class SQLWarehouseModel {
 
   static async findById(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('id', sql.UniqueIdentifier, id)
         .query(`
@@ -3007,7 +3022,7 @@ class SQLWarehouseModel {
 
   static async findByRegion(regionId) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const result = await request
         .input('vung_id', sql.NVarChar(10), regionId)
         .query(`
@@ -3037,7 +3052,7 @@ class SQLWarehouseModel {
 
   static async create(warehouseData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       const id = warehouseData.id || sql.UniqueIdentifier.newGuid();
       
       const result = await request
@@ -3076,7 +3091,7 @@ class SQLWarehouseModel {
 
   static async update(id, warehouseData) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       let updateFields = [];
       
@@ -3135,7 +3150,7 @@ class SQLWarehouseModel {
 
   static async delete(id) {
     try {
-      const request = new sql.Request();
+      const request = createRequest();
       
       const result = await request
         .input('id', sql.UniqueIdentifier, id)

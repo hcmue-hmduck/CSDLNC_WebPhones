@@ -3519,8 +3519,8 @@
                                             // Tạo hoặc update inventory record
                                             // Backend sẽ tự động lấy kho_id từ site_origin của variant
                                             const inventoryData = {
-                                                variant_id: combo.sql_variant_id,
-                                                so_luong_kha_dung: parseInt(combo.stock) || 0,
+                                                bien_the_san_pham_id: combo.sql_variant_id,
+                                                so_luong_ton_kho: parseInt(combo.stock) || 0,
                                                 ngay_cap_nhat: new Date()
                                             };
                                             
@@ -3909,8 +3909,8 @@
                                         try {
                                             // Backend sẽ tự động lấy kho_id từ site_origin của variant
                                             const inventoryData = {
-                                                variant_id: combo.sql_variant_id,
-                                                so_luong_kha_dung: parseInt(combo.stock) || 0,
+                                                bien_the_san_pham_id: combo.sql_variant_id,
+                                                so_luong_ton_kho: parseInt(combo.stock) || 0,
                                                 ngay_cap_nhat: new Date()
                                             };
                                             

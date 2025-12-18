@@ -5,11 +5,9 @@ import dotenv from 'dotenv';
 // Load biến môi trường
 dotenv.config();
 
-// Cấu hình SQL Server từ biến môi trường
-const dbConfig = {
-  server: process.env.SQL_SERVER || 'localhost',
-  database: process.env.SQL_DATABASE || 'CSDLNC_WebPhone',
-  user: process.env.SQL_USER || 'sa',
+// Base config cho SQL Server
+const baseConfig = {
+  user: process.env.SQL_USER,
   password: process.env.SQL_PASSWORD,
   options: {
     encrypt: process.env.SQL_ENCRYPT === 'true',
@@ -18,68 +16,127 @@ const dbConfig = {
     trustedConnection: process.env.SQL_TRUSTED_CONNECTION === 'true',
   },
   port: parseInt(process.env.SQL_PORT) || 1433,
+  pool: {
+    max: 10,
+    min: 2,
+    idleTimeoutMillis: 30000
+  }
 };
 
-// Kết nối SQL Server
+// Connection pools cho từng vùng
+const connectionPools = {
+  default: null,
+  bac: null,
+  trung: null,
+  nam: null
+};
+
+// Configs cho từng vùng
+const dbConfigs = {
+  default: {
+    ...baseConfig,
+    server: process.env.SQL_SERVER,
+    database: process.env.SQL_DATABASE,
+  },
+  bac: {
+    ...baseConfig,
+    server: process.env.SQL_SERVER_BAC || process.env.SQL_SERVER,
+    database: process.env.SQL_DATABASE_BAC || process.env.SQL_DATABASE,
+  },
+  trung: {
+    ...baseConfig,
+    server: process.env.SQL_SERVER_TRUNG || process.env.SQL_SERVER,
+    database: process.env.SQL_DATABASE_TRUNG || process.env.SQL_DATABASE,
+  },
+  nam: {
+    ...baseConfig,
+    server: process.env.SQL_SERVER_NAM || process.env.SQL_SERVER,
+    database: process.env.SQL_DATABASE_NAM || process.env.SQL_DATABASE,
+  }
+};
+
+// Kết nối SQL Server - Tạo connection pool mặc định
 async function connectSQLDB() {
   try {
-    await sql.connect(dbConfig);
-    console.log('SQL Server connected successfully');
+    connectionPools.default = await new sql.ConnectionPool(dbConfigs.default).connect();
+    console.log('✅ Default SQL Server pool connected:', dbConfigs.default.server, '/', dbConfigs.default.database);
     
     // Test query
-    const result = await sql.query`SELECT @@VERSION as version`;
+    const result = await connectionPools.default.query`SELECT @@VERSION as version`;
     console.log('SQL Server version:', result.recordset[0].version);
     
-    return sql;
+    return connectionPools.default;
   } catch (err) {
     console.error('SQL Server connection error:', err);
     throw err;
   }
 }
 
-// Chuyển đổi kết nối SQL Server dựa trên vùng
-async function switchDatabaseByRegion(vungId) {
+// Lấy connection pool theo vùng
+async function getConnectionByRegion(vungId) {
   try {
-    let newConfig = { ...dbConfig };
+    // Chuẩn hóa vungId
+    let region = 'default';
     
-    // Chuẩn hóa vungId về lowercase nếu là string
-    const normalizedVungId = typeof vungId === 'string' ? vungId.toLowerCase() : vungId;
-    
-    console.log('🔍 Normalized vungId:', normalizedVungId);
-    
-    // Check cả string và số
-    if (normalizedVungId === 'bac' || normalizedVungId === 1 || normalizedVungId === '1') {
-      // Miền Bắc
-      newConfig.server = process.env.SQL_SERVER_BAC || process.env.SQL_SERVER;
-      newConfig.database = process.env.SQL_DATABASE_BAC || process.env.SQL_DATABASE;
-      console.log('🔄 Switching to Miền Bắc database');
-    } else if (normalizedVungId === 'trung' || normalizedVungId === 2 || normalizedVungId === '2') {
-      // Miền Trung
-      newConfig.server = process.env.SQL_SERVER_TRUNG || process.env.SQL_SERVER;
-      newConfig.database = process.env.SQL_DATABASE_TRUNG || process.env.SQL_DATABASE;
-      console.log('🔄 Switching to Miền Trung database');
-    } else if (normalizedVungId === 'nam' || normalizedVungId === 3 || normalizedVungId === '3') {
-      // Miền Nam
-      newConfig.server = process.env.SQL_SERVER_NAM || process.env.SQL_SERVER;
-      newConfig.database = process.env.SQL_DATABASE_NAM || process.env.SQL_DATABASE;
-      console.log('🔄 Switching to Miền Nam database');
-    } else {
-      // Mặc định
-      console.log('🔄 Using default database');
+    if (vungId) {
+      const normalizedVungId = typeof vungId === 'string' ? vungId.toLowerCase() : vungId;
+      
+      if (normalizedVungId === 'bac' || normalizedVungId === 1 || normalizedVungId === '1') {
+        region = 'bac';
+      } else if (normalizedVungId === 'trung' || normalizedVungId === 2 || normalizedVungId === '2') {
+        region = 'trung';
+      } else if (normalizedVungId === 'nam' || normalizedVungId === 3 || normalizedVungId === '3') {
+        region = 'nam';
+      }
     }
     
-    // Đóng connection hiện tại
-    await sql.close();
+    // Tạo pool nếu chưa tồn tại
+    if (!connectionPools[region]) {
+      console.log(`🔄 Creating connection pool for region: ${region}`);
+      connectionPools[region] = await new sql.ConnectionPool(dbConfigs[region]).connect();
+      console.log(`✅ Pool connected:`, dbConfigs[region].server, '/', dbConfigs[region].database);
+    }
     
-    // Kết nối với config mới
-    await sql.connect(newConfig);
-    console.log('✅ Connected to:', newConfig.server, '/', newConfig.database);
-    
-    return { server: newConfig.server, database: newConfig.database };
+    return connectionPools[region];
   } catch (err) {
-    console.error('❌ Error switching database:', err);
+    console.error('❌ Error getting connection:', err);
     throw err;
   }
+}
+
+// Middleware để inject connection vào request
+function injectDBConnection() {
+  return async (req, res, next) => {
+    try {
+      const vungId = req.session?.user?.vung_id;
+      req.dbPool = await getConnectionByRegion(vungId);
+      next();
+    } catch (err) {
+      console.error('❌ Error injecting DB connection:', err);
+      req.dbPool = connectionPools.default; // Fallback to default
+      next();
+    }
+  };
+}
+
+// ⚠️ DEPRECATED: Không dùng function này nữa vì ảnh hưởng global connection
+// Giữ lại để backward compatibility, nhưng chỉ return info
+async function switchDatabaseByRegion(vungId) {
+  console.warn('⚠️ switchDatabaseByRegion is deprecated. Use getConnectionByRegion instead.');
+  
+  let region = 'default';
+  const normalizedVungId = typeof vungId === 'string' ? vungId.toLowerCase() : vungId;
+  
+  if (normalizedVungId === 'bac' || normalizedVungId === 1 || normalizedVungId === '1') {
+    region = 'bac';
+  } else if (normalizedVungId === 'trung' || normalizedVungId === 2 || normalizedVungId === '2') {
+    region = 'trung';
+  } else if (normalizedVungId === 'nam' || normalizedVungId === 3 || normalizedVungId === '3') {
+    region = 'nam';
+  }
+  
+  const config = dbConfigs[region];
+  return { server: config.server, database: config.database };
 }
 
 // Kết nối MongoDB
@@ -117,8 +174,10 @@ export default {
   connectSQLDB, 
   connectMongoDB, 
   connectAllDB,
-  switchDatabaseByRegion,  // Export function chuyển database
-  dbConfig,  // Export SQL config
+  switchDatabaseByRegion,  // ⚠️ Deprecated - keep for backward compatibility
+  getConnectionByRegion,   // ✅ New: Get connection pool by region
+  injectDBConnection,      // ✅ New: Middleware to inject connection
+  connectionPools,         // ✅ Export pools for direct access if needed
   sql,
   mongoose 
 };
