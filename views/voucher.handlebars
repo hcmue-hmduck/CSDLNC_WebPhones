@@ -8,7 +8,7 @@
                         <i class="fas fa-ticket-alt"></i>
                     </div>
                     <div>
-                        <h1>Quản Lý Voucher</h1>
+                        <h1>QUẢN LÝ VOUCHER</h1>
                         <p>Tạo và quản lý các chương trình giảm giá voucher</p>
                     </div>
                 </div>
@@ -366,9 +366,16 @@
                                     Khu Vực <span class="text-danger">*</span>
                                 </label>
                                 <select class="form-select" id="voucherRegion" required>
-                                    {{#each regions}}
-                                    <option value="{{this.ma_vung}}">{{this.ten_vung}}</option>
-                                    {{/each}}
+                                    {{#if regions}}
+                                        {{#unless (eq regions.length 1)}}
+                                            <option value="">-- Chọn vùng --</option>
+                                        {{/unless}}
+                                        {{#each regions}}
+                                            <option value="{{this.ma_vung}}" {{#if (eq ../regions.length 1)}}selected{{/if}}>{{this.ten_vung}}</option>
+                                        {{/each}}
+                                    {{else}}
+                                        <option value="">-- Không có vùng nào --</option>
+                                    {{/if}}
                                 </select>
                             </div>
                             <div class="form-group">
@@ -2144,6 +2151,12 @@ let currentProductVariants = [];
 let currentProduct = null;
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Auto-disable region select if only 1 option
+    const voucherRegionSelect = document.getElementById('voucherRegion');
+    if (voucherRegionSelect && voucherRegionSelect.options.length === 1) {
+        voucherRegionSelect.disabled = true;
+    }
+    
     loadVouchers();
     loadProductsForSelection();
     setupEventListeners();

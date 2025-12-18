@@ -1377,13 +1377,17 @@ app.get('/api/cart', async (req, res) => {
                 // Tính tổng thành tiền hỗn hợp
                 thanhTien = (soLuongFlashSale * flashSalePrice) + (soLuongGiaGoc * variantPrice);
                 
-                // Giá hiển thị: giá flash sale nếu chưa vượt giới hạn
-                finalPrice = item.so_luong <= conDuocMua ? flashSalePrice : variantPrice;
+                // Giá hiển thị: LUÔN dùng giá flash sale khi có flash sale active
+                finalPrice = flashSalePrice;
+                
+                console.log(`⚡ Flash sale active for variant ${item.variant_id}: price=${flashSalePrice}, quantity=${soLuongFlashSale}/${item.so_luong}`);
             } else if (isFlashSale && flashSalePrice && conDuocMua === 0) {
                 // User đã mua hết hạn mức flash sale → hiển thị giá gốc
                 finalPrice = variantPrice;
                 thanhTien = variantPrice * item.so_luong;
                 soLuongGiaGoc = item.so_luong;
+                
+                console.log(`⚠️ Flash sale limit reached for variant ${item.variant_id}: using regular price=${variantPrice}`);
             }
             
             return {
@@ -6771,9 +6775,15 @@ const updatedUpload = multer({
 // GET /admin/flashsale - Trang quản lý flash sale
 app.get('/admin/flashsale', requireAdmin, async (req, res) => {
     try {
+        // Fetch regions from database using admin's pool
+        const pool = req.dbPool;
+        const regionsResult = await pool.request()
+            .query('SELECT ma_vung, ten_vung FROM regions WHERE trang_thai = 1 ORDER BY ten_vung');
+        
         res.render('flashsale', {
             layout: 'AdminMain',
-            title: 'Quản Lý Flash Sale'
+            title: 'Quản Lý Flash Sale',
+            regions: regionsResult.recordset
         });
     } catch (error) {
         console.error('Flash Sale Page Error:', error);
@@ -9958,9 +9968,15 @@ app.delete('/api/warehouses/:id', async (req, res) => {
 // GET /admin/voucher - Render voucher management page
 app.get('/admin/voucher', requireAdmin, async (req, res) => {
     try {
+        // Fetch regions from database using admin's pool
+        const pool = req.dbPool;
+        const regionsResult = await pool.request()
+            .query('SELECT ma_vung, ten_vung FROM regions WHERE trang_thai = 1 ORDER BY ten_vung');
+        
         res.render('voucher', {
             layout: 'AdminMain',
-            title: 'Quản lý Voucher'
+            title: 'Quản lý Voucher',
+            regions: regionsResult.recordset
         });
     } catch (error) {
         console.error('Error rendering voucher page:', error);
@@ -10893,14 +10909,25 @@ app.post('/api/orders', async (req, res) => {
             
             const inventory = inventoryResult.recordset[0];
             
+            // Ưu tiên dùng flash sale info từ frontend nếu có, nếu không thì dùng từ database
+            const finalFlashSaleItemId = item.flash_sale_item_id || (flashSaleInfo ? flashSaleInfo.flash_sale_item_id : null);
+            const finalGiaFlashSale = item.gia_flash_sale || (flashSaleInfo ? flashSaleInfo.gia_flash_sale : null);
+            const finalGioiHanMua = item.gioi_han_mua || (flashSaleInfo ? flashSaleInfo.gioi_han_mua : null);
+            
+            console.log('🔥 Flash sale info for variant', item.variant_id, ':', {
+                fromFrontend: { id: item.flash_sale_item_id, price: item.gia_flash_sale },
+                fromDB: flashSaleInfo,
+                final: { id: finalFlashSaleItemId, price: finalGiaFlashSale }
+            });
+            
             itemsWithWarehouse.push({
                 ...item,
                 warehouse_id: inventory.warehouse_id,
                 warehouse_region: inventory.warehouse_region,
                 site_origin: site_origin,
-                flash_sale_item_id: flashSaleInfo ? flashSaleInfo.flash_sale_item_id : null,
-                gia_flash_sale: flashSaleInfo ? flashSaleInfo.gia_flash_sale : null,
-                gioi_han_mua: flashSaleInfo ? flashSaleInfo.gioi_han_mua : null
+                flash_sale_item_id: finalFlashSaleItemId,
+                gia_flash_sale: finalGiaFlashSale,
+                gioi_han_mua: finalGioiHanMua
             });
         }
         

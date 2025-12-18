@@ -18,24 +18,9 @@
     max-width: 1400px;
 }
 
-/* Location Selector */
-.cps-location {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.cps-location .form-select {
-    border: 1px solid #dee2e6;
-    font-size: 13px;
-    padding: 4px 28px 4px 8px;
-    width: auto;
-    min-width: 140px;
-}
-
-.cps-location .form-select:focus {
-    border-color: var(--cps-red);
-    box-shadow: 0 0 0 0.2rem rgba(215, 0, 24, 0.15);
+.cps-header .row {
+    justify-content: center;
+    gap: 20px;
 }
 
 /* Logo */
@@ -44,15 +29,16 @@
     align-items: center;
     text-decoration: none;
     gap: 8px;
+    padding-right: 20px;
 }
 
 .cps-logo img {
-    height: 36px;
+    height: 38px;
     width: auto;
 }
 
 .cps-logo-text {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
     color: var(--cps-red);
     display: inline-block;
@@ -62,11 +48,16 @@
 .cps-categories-dropdown .btn {
     padding: 6px 12px;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
+}
+
+.cps-categories-dropdown .btn:hover {
+    background-color: var(--cps-red-dark);
 }
 
 .cps-categories-dropdown .btn i {
-    font-size: 14px;
+    font-size: 15px;
+    margin-right: 2px;
 }
 
 .cps-mega-dropdown {
@@ -105,30 +96,45 @@
 
 /* Search Bar */
 .cps-search-wrapper .input-group {
-    max-width: 500px;
+    max-width: 600px;
 }
 
 .cps-search-wrapper .form-control {
     border: 2px solid var(--cps-red);
     border-right: none;
-    font-size: 13px;
-    padding: 8px 12px;
+    font-size: 14px;
+    padding: 10px 16px;
+    border-radius: 8px 0 0 8px;
+    transition: all 0.3s ease;
 }
 
 .cps-search-wrapper .form-control:focus {
     border-color: var(--cps-red);
-    box-shadow: none;
+    box-shadow: 0 0 0 0.2rem rgba(215, 0, 24, 0.1);
+    transform: translateY(-1px);
+}
+
+.cps-search-wrapper .form-control::placeholder {
+    color: #999;
 }
 
 .cps-search-wrapper .btn {
     border: 2px solid var(--cps-red);
     border-left: none;
-    padding: 6px 16px;
+    padding: 8px 20px;
+    border-radius: 0 8px 8px 0;
+    transition: all 0.3s ease;
 }
 
 .cps-search-wrapper .btn:hover {
     background: var(--cps-red-dark);
     border-color: var(--cps-red-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(215, 0, 24, 0.3);
+}
+
+.cps-search-wrapper .btn i {
+    font-size: 16px;
 }
 
 /* Search Suggestions */
@@ -170,19 +176,25 @@
 /* Hotline */
 .cps-header a[href^="tel:"] {
     color: inherit;
+    text-decoration: none;
 }
 
 .cps-header a[href^="tel:"] i {
     font-size: 20px;
+    color: var(--cps-red);
 }
 
 .cps-header a[href^="tel:"] small {
+    font-size: 10px;
     line-height: 1;
+    color: #666;
 }
 
 .cps-header a[href^="tel:"] strong {
     line-height: 1;
-    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cps-red);
 }
 
 /* User Dropdown */

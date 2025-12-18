@@ -156,10 +156,16 @@
                                 <div class="form-group">
                                     <label for="vungId" class="form-label">Vùng áp dụng *</label>
                                     <select class="form-select" id="vungId" required>
-                                        <option value="">-- Chọn vùng --</option>
-                                        <option value="bac">Miền Bắc</option>
-                                        <option value="trung">Miền Trung</option>
-                                        <option value="nam">Miền Nam</option>
+                                        {{#if regions}}
+                                            {{#unless (eq regions.length 1)}}
+                                                <option value="">-- Chọn vùng --</option>
+                                            {{/unless}}
+                                            {{#each regions}}
+                                                <option value="{{this.ma_vung}}" {{#if (eq ../regions.length 1)}}selected{{/if}}>{{this.ten_vung}}</option>
+                                            {{/each}}
+                                        {{else}}
+                                            <option value="">-- Không có vùng nào --</option>
+                                        {{/if}}
                                     </select>
                                 </div>
                             </div>
@@ -2103,6 +2109,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectAllVariants = document.getElementById('selectAllVariants');
     const addSelectedVariants = document.getElementById('addSelectedVariants');
     const moTaTextarea = document.getElementById('moTa');
+    const vungIdSelect = document.getElementById('vungId');
 
     // ==========================================
     // INITIALIZATION
@@ -2110,6 +2117,11 @@ document.addEventListener('DOMContentLoaded', function() {
     init();
 
     function init() {
+        // Auto-disable region select if only 1 option
+        if (vungIdSelect && vungIdSelect.options.length === 1) {
+            vungIdSelect.disabled = true;
+        }
+        
         loadFlashSalesData();
         loadProducts();
         attachEventListeners();

@@ -1,6 +1,7 @@
 import mongoose, { model } from "mongoose";
 import sql from 'mssql';
 import db from '../../server.js';
+import { v4 as uuidv4 } from 'uuid';
 
 // ✅ Helper để lấy connection pool (default hoặc từ request)
 function getPool(requestPool) {
@@ -1071,7 +1072,9 @@ class SQLProductModel {
           } else if (field === 'luot_xem') {
             request.input(field, sql.Int, productData[field]);
           } else if (field === 'gia_ban' || field === 'gia_niem_yet') {
-            request.input(field, sql.Decimal(15, 2), productData[field]);
+            // Parse to float to ensure valid number format
+            const price = parseFloat(productData[field]) || 0;
+            request.input(field, sql.Decimal(15, 2), price);
           } else {
             request.input(field, sql.NVarChar(sql.MAX), productData[field]);
           }
@@ -2805,7 +2808,7 @@ class SQLInventoryModel {
   static async create(inventoryData) {
     try {
       const request = createRequest();
-      const id = inventoryData.id || sql.UniqueIdentifier.newGuid();
+      const id = inventoryData.id || uuidv4();
       
       const result = await request
         .input('id', sql.UniqueIdentifier, id)

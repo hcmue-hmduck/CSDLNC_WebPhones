@@ -2314,12 +2314,22 @@ document.addEventListener('DOMContentLoaded', async function() {
           if (!variantId) {
             console.error('Missing variant_id for item:', item);
           }
+          
+          // Lấy thông tin flash sale nếu có
+          const flashSaleData = item.flash_sale_data || (item.is_flash_sale ? {
+            flash_sale_item_id: item.flash_sale_item_id,
+            gia_flash_sale: item.gia_ban, // Nếu là flash sale, gia_ban đã là giá flash sale
+            gioi_han_mua: item.gioi_han_mua
+          } : null);
+          
           return {
             cart_item_id: item.id,
             variant_id: variantId,
             so_luong: item.so_luong,
             don_gia: item.gia_ban,
-            flash_sale_item_id: item.flash_sale_item_id || null
+            flash_sale_item_id: flashSaleData?.flash_sale_item_id || null,
+            gia_flash_sale: flashSaleData?.gia_flash_sale || null,
+            gioi_han_mua: flashSaleData?.gioi_han_mua || null
           };
         }),
         

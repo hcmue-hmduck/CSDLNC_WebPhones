@@ -3506,29 +3506,30 @@
                     }
                     
                     // Cập nhật inventory cho từng variant
-                    if (updatedVariantsData && typeof updatedVariantsData === 'object') {
-                        console.log('📝 Updating inventory for variants...');
-                        
-                        // Duyệt qua từng region
-                        for (const region of Object.keys(updatedVariantsData)) {
-                            const regionData = updatedVariantsData[region];
-                            if (regionData?.variant_combinations) {
-                                for (const combo of regionData.variant_combinations) {
-                                    if (combo.sql_variant_id) {
-                                        try {
-                                            // Tạo hoặc update inventory record
-                                            // Backend sẽ tự động lấy kho_id từ site_origin của variant
-                                            const inventoryData = {
-                                                bien_the_san_pham_id: combo.sql_variant_id,
-                                                so_luong_ton_kho: parseInt(combo.stock) || 0,
-                                                ngay_cap_nhat: new Date()
-                                            };
-                                            
-                                            await ProductAPIService.upsertInventory(inventoryData);
-                                            console.log(`✅ Updated inventory for variant ${combo.sql_variant_id} (${region}) - stock: ${combo.stock}`);
-                                        } catch (error) {
-                                            console.error(`❌ Error updating inventory for variant ${combo.sql_variant_id}:`, error);
-                                        }
+                    console.log('📝 Updating inventory for variants...');
+                    
+                    // Duyệt qua variantsByRegion thay vì updatedVariantsData
+                    for (const region of Object.keys(window.productVariantsManager.variantsByRegion)) {
+                        const regionData = window.productVariantsManager.variantsByRegion[region];
+                        if (regionData?.combinations && regionData.combinations.length > 0) {
+                            console.log(`📦 Processing ${regionData.combinations.length} variants in region: ${region}`);
+                            
+                            for (const combo of regionData.combinations) {
+                                if (combo.sql_variant_id) {
+                                    try {
+                                        // Tạo hoặc update inventory record
+                                        // Backend sẽ tự động lấy kho_id từ site_origin của variant
+                                        const inventoryData = {
+                                            bien_the_san_pham_id: combo.sql_variant_id,
+                                            so_luong_ton_kho: parseInt(combo.stock) || 0,
+                                            ngay_cap_nhat: new Date()
+                                        };
+                                        
+                                        console.log(`📝 Upserting inventory for variant ${combo.sql_variant_id} (${region}, ${combo.sku}) - stock: ${combo.stock}`);
+                                        await ProductAPIService.upsertInventory(inventoryData);
+                                        console.log(`✅ Updated inventory for variant ${combo.sql_variant_id} (${region}) - stock: ${combo.stock}`);
+                                    } catch (error) {
+                                        console.error(`❌ Error updating inventory for variant ${combo.sql_variant_id}:`, error);
                                     }
                                 }
                             }
@@ -3897,28 +3898,29 @@
                     }
                     
                     // Cập nhật inventory cho từng variant (Create flow)
-                    if (updatedVariantsData && typeof updatedVariantsData === 'object') {
-                        console.log('📝 Updating inventory for variants (Create)...');
-                        
-                        // Duyệt qua từng region
-                        for (const region of Object.keys(updatedVariantsData)) {
-                            const regionData = updatedVariantsData[region];
-                            if (regionData?.variant_combinations) {
-                                for (const combo of regionData.variant_combinations) {
-                                    if (combo.sql_variant_id) {
-                                        try {
-                                            // Backend sẽ tự động lấy kho_id từ site_origin của variant
-                                            const inventoryData = {
-                                                bien_the_san_pham_id: combo.sql_variant_id,
-                                                so_luong_ton_kho: parseInt(combo.stock) || 0,
-                                                ngay_cap_nhat: new Date()
-                                            };
-                                            
-                                            await ProductAPIService.upsertInventory(inventoryData);
-                                            console.log(`✅ Updated inventory for variant ${combo.sql_variant_id} (${region}) - stock: ${combo.stock}`);
-                                        } catch (error) {
-                                            console.error(`❌ Error updating inventory for variant ${combo.sql_variant_id}:`, error);
-                                        }
+                    console.log('📝 Updating inventory for variants (Create)...');
+                    
+                    // Duyệt qua variantsByRegion thay vì updatedVariantsData
+                    for (const region of Object.keys(window.productVariantsManager.variantsByRegion)) {
+                        const regionData = window.productVariantsManager.variantsByRegion[region];
+                        if (regionData?.combinations && regionData.combinations.length > 0) {
+                            console.log(`📦 Processing ${regionData.combinations.length} variants in region: ${region}`);
+                            
+                            for (const combo of regionData.combinations) {
+                                if (combo.sql_variant_id) {
+                                    try {
+                                        // Backend sẽ tự động lấy kho_id từ site_origin của variant
+                                        const inventoryData = {
+                                            bien_the_san_pham_id: combo.sql_variant_id,
+                                            so_luong_ton_kho: parseInt(combo.stock) || 0,
+                                            ngay_cap_nhat: new Date()
+                                        };
+                                        
+                                        console.log(`📝 Upserting inventory for variant ${combo.sql_variant_id} (${region}, ${combo.sku}) - stock: ${combo.stock}`);
+                                        await ProductAPIService.upsertInventory(inventoryData);
+                                        console.log(`✅ Updated inventory for variant ${combo.sql_variant_id} (${region}) - stock: ${combo.stock}`);
+                                    } catch (error) {
+                                        console.error(`❌ Error updating inventory for variant ${combo.sql_variant_id}:`, error);
                                     }
                                 }
                             }
@@ -10511,29 +10513,7 @@ class ProductVariantsManager {
                 if (combo) {
                     const newStock = parseInt(e.target.value) || 0;
                     combo.stock = newStock;
-                    
-                    // Nếu variant đã được tạo trong DB, update inventory ngay lập tức
-                    if (combo.sql_variant_id) {
-                        try {
-                            console.log(`📦 Updating inventory for variant ${combo.sql_variant_id} - stock: ${newStock}`);
-                            await ProductAPIService.upsertInventory({
-                                variant_id: combo.sql_variant_id,
-                                so_luong_kha_dung: newStock,
-                                ngay_cap_nhat: new Date()
-                            });
-                            console.log(`✅ Inventory updated successfully`);
-                            
-                            // Hiển thị thông báo nhỏ
-                            const toast = document.createElement('div');
-                            toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#10b981;color:white;padding:12px 20px;border-radius:8px;z-index:9999;animation:slideIn 0.3s ease;';
-                            toast.textContent = `✓ Đã cập nhật tồn kho: ${newStock}`;
-                            document.body.appendChild(toast);
-                            setTimeout(() => toast.remove(), 2000);
-                        } catch (error) {
-                            console.error(`❌ Error updating inventory:`, error);
-                            alert('Lỗi cập nhật tồn kho. Vui lòng thử lại.');
-                        }
-                    }
+                    console.log(`📦 Stock updated for combo ${comboId}: ${newStock} (will save to inventory when clicking Save)`);
                 }
             });
         });

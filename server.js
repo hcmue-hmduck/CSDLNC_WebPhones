@@ -40,16 +40,22 @@ const dbConfigs = {
   },
   bac: {
     ...baseConfig,
+    user: process.env.SQL_USER_BAC || process.env.SQL_USER,
+    password: process.env.SQL_PASSWORD_BAC || process.env.SQL_PASSWORD,
     server: process.env.SQL_SERVER_BAC || process.env.SQL_SERVER,
     database: process.env.SQL_DATABASE_BAC || process.env.SQL_DATABASE,
   },
   trung: {
     ...baseConfig,
+    user: process.env.SQL_USER_TRUNG || process.env.SQL_USER,
+    password: process.env.SQL_PASSWORD_TRUNG || process.env.SQL_PASSWORD,
     server: process.env.SQL_SERVER_TRUNG || process.env.SQL_SERVER,
     database: process.env.SQL_DATABASE_TRUNG || process.env.SQL_DATABASE,
   },
   nam: {
     ...baseConfig,
+    user: process.env.SQL_USER_NAM || process.env.SQL_USER,
+    password: process.env.SQL_PASSWORD_NAM || process.env.SQL_PASSWORD,
     server: process.env.SQL_SERVER_NAM || process.env.SQL_SERVER,
     database: process.env.SQL_DATABASE_NAM || process.env.SQL_DATABASE,
   }

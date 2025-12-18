@@ -10,19 +10,6 @@
                 </a>
             </div>
 
-            <!-- Location Selector -->
-            <div class="col-auto d-none d-lg-block">
-                <div class="cps-location">
-                    <i class="fas fa-map-marker-alt text-danger"></i>
-                    <select id="locationSelect" class="form-select form-select-sm">
-                        <option value="" selected>Chọn vùng miền</option>
-                        {{#each regions}}
-                        <option value="{{this.id}}">{{this.ten_vung}}</option>
-                        {{/each}}
-                    </select>
-                </div>
-            </div>
-
             <!-- Categories Dropdown -->
             <div class="col-auto">
                 <div class="dropdown cps-categories-dropdown">
@@ -133,11 +120,6 @@
                         <li class="cps-user-logged d-none">
                             <a class="dropdown-item" href="/donhang">
                                 <i class="fas fa-shopping-bag me-2"></i>Đơn hàng của tôi
-                            </a>
-                        </li>
-                        <li class="cps-user-logged d-none">
-                            <a class="dropdown-item" href="/wishlist">
-                                <i class="fas fa-heart me-2"></i>Yêu thích
                             </a>
                         </li>
                         <li class="cps-user-logged d-none">
