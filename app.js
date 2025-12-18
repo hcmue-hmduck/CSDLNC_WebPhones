@@ -8833,7 +8833,7 @@ console.log('✅ Order API routes registered at /api/donhang');
 
 // PUT /api/donhang/:id/status - Update order status
 app.put('/api/donhang/:id/status', requireAdmin, async (req, res) => {
-    const transaction = new sql.Transaction();
+    const transaction = new sql.Transaction(req.dbPool || db.connectionPools.default);
     
     try {
         const { id } = req.params;
@@ -10963,35 +10963,58 @@ app.post('/api/orders', async (req, res) => {
                 console.log(`📦 Kho giao hàng cho site ${siteOrigin}:`, siteWarehouseResult.recordset[0]);
                 
                 // ✅ 2. Query phí vận chuyển cho site này
-                const siteShippingRequest = new sql.Request(transaction);
-                const siteShippingResult = await siteShippingRequest
-                    .input('shipping_method_id', sql.UniqueIdentifier, shipping_method_region_id)
-                    .input('site_origin', sql.NVarChar(10), siteOrigin)
+                // First get shipping_method_id from the provided shipping_method_region_id
+                const originalShippingRequest = new sql.Request(transaction);
+                const originalShippingResult = await originalShippingRequest
+                    .input('shipping_method_region_id', sql.UniqueIdentifier, shipping_method_region_id)
                     .query(`
-                        SELECT TOP 1 
-                            smr.id as shipping_method_region_id,
-                            smr.chi_phi_van_chuyen,
-                            smr.thoi_gian_giao_du_kien
-                        FROM shipping_method_regions smr
-                        WHERE smr.shipping_method_id = @shipping_method_id
-                          AND smr.region_id = @site_origin
-                          AND smr.trang_thai = 1
+                        SELECT shipping_method_id 
+                        FROM shipping_method_regions
+                        WHERE id = @shipping_method_region_id
                     `);
                 
-                // Fallback: nếu không tìm thấy shipping cho site_origin, dùng vùng khách hàng
+                let actual_shipping_method_id = null;
+                if (originalShippingResult.recordset.length > 0) {
+                    actual_shipping_method_id = originalShippingResult.recordset[0].shipping_method_id;
+                }
+                
+                // Now query shipping for this site's region
                 let site_shipping_method_region_id = shipping_method_region_id;
                 let site_phi_van_chuyen_base = 0;
                 
-                if (siteShippingResult.recordset.length > 0) {
-                    site_shipping_method_region_id = siteShippingResult.recordset[0].shipping_method_region_id;
-                    site_phi_van_chuyen_base = parseFloat(siteShippingResult.recordset[0].chi_phi_van_chuyen) || 0;
-                    console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base);
+                if (actual_shipping_method_id) {
+                    const siteShippingRequest = new sql.Request(transaction);
+                    const siteShippingResult = await siteShippingRequest
+                        .input('shipping_method_id', sql.UniqueIdentifier, actual_shipping_method_id)
+                        .input('site_origin', sql.NVarChar(10), siteOrigin)
+                        .query(`
+                            SELECT TOP 1 
+                                smr.id as shipping_method_region_id,
+                                smr.chi_phi_van_chuyen,
+                                smr.thoi_gian_giao_du_kien
+                            FROM shipping_method_regions smr
+                            WHERE smr.shipping_method_id = @shipping_method_id
+                              AND smr.region_id = @site_origin
+                              AND smr.trang_thai = 1
+                        `);
+                    
+                    if (siteShippingResult.recordset.length > 0) {
+                        site_shipping_method_region_id = siteShippingResult.recordset[0].shipping_method_region_id;
+                        site_phi_van_chuyen_base = parseFloat(siteShippingResult.recordset[0].chi_phi_van_chuyen) || 0;
+                        console.log(`🚚 Phí vận chuyển cho site ${siteOrigin}:`, site_phi_van_chuyen_base);
+                    } else {
+                        // No shipping method for this region, fallback
+                        site_phi_van_chuyen_base = is_split_order 
+                            ? (phi_van_chuyen_khach / siteOrigins.length)
+                            : phi_van_chuyen_khach;
+                        console.log(`⚠️ Không tìm thấy phí ship cho site ${siteOrigin}, dùng fallback:`, site_phi_van_chuyen_base);
+                    }
                 } else {
                     // Fallback: phân bổ theo tỉ lệ từ phi_van_chuyen_khach
                     site_phi_van_chuyen_base = is_split_order 
                         ? (phi_van_chuyen_khach / siteOrigins.length)
                         : phi_van_chuyen_khach;
-                    console.log(`⚠️ Không tìm thấy phí ship cho site ${siteOrigin}, dùng fallback:`, site_phi_van_chuyen_base);
+                    console.log(`⚠️ Không tìm thấy shipping method, dùng fallback:`, site_phi_van_chuyen_base);
                 }
                 
                 // Calculate totals for this site's items
@@ -11362,6 +11385,7 @@ app.post('/api/orders', async (req, res) => {
                     ? `Đặt hàng thành công! Đơn hàng của bạn được chia thành ${createdOrders.length} đơn từ các khu vực khác nhau.`
                     : 'Đặt hàng thành công',
                 data: {
+                    orderId: createdOrders[0].orderId, // ID của đơn hàng đầu tiên (dùng cho redirect)
                     orderCode: ma_don_hang, // Mã đơn hàng chung
                     isSplitOrder: is_split_order,
                     orders: createdOrders.map(o => ({
@@ -11457,6 +11481,7 @@ app.get('/api/orders', async (req, res) => {
                     ngay_tao: order.ngay_tao,
                     ngay_cap_nhat: order.ngay_cap_nhat,
                     order_ids: [order.id], // Track all order IDs
+                    statuses: [order.trang_thai], // Track all statuses
                     items: []
                 });
             } else {
@@ -11467,18 +11492,30 @@ app.get('/api/orders', async (req, res) => {
                 merged.gia_tri_giam_voucher += order.gia_tri_giam_voucher;
                 merged.tong_thanh_toan += order.tong_thanh_toan;
                 merged.order_ids.push(order.id);
-                
-                // Update status to worst case (cho_xac_nhan < dang_xu_ly < dang_giao < hoan_thanh/huy)
-                const statusPriority = {
-                    'cho_xac_nhan': 1,
-                    'dang_xu_ly': 2,
-                    'dang_giao': 3,
-                    'hoan_thanh': 4,
-                    'huy': 0
-                };
-                if (statusPriority[order.trang_thai] < statusPriority[merged.trang_thai]) {
-                    merged.trang_thai = order.trang_thai;
-                }
+                merged.statuses.push(order.trang_thai);
+            }
+        }
+        
+        // ✅ Determine final status for each merged order
+        const statusPriority = {
+            'huy': 0, // Lowest (if any order is cancelled, show cancelled)
+            'cho_xac_nhan': 1,
+            'dang_xu_ly': 2,
+            'dang_giao': 3,
+            'hoan_thanh': 4 // Highest
+        };
+        
+        for (let [ma_don_hang, mergedOrder] of ordersMap) {
+            const uniqueStatuses = [...new Set(mergedOrder.statuses)];
+            
+            if (uniqueStatuses.length === 1) {
+                // ✅ All orders have same status
+                mergedOrder.trang_thai = uniqueStatuses[0];
+            } else {
+                // ✅ Different statuses - show the lowest/worst one
+                mergedOrder.trang_thai = uniqueStatuses.reduce((worst, current) => {
+                    return statusPriority[current] < statusPriority[worst] ? current : worst;
+                });
             }
         }
         
@@ -11617,14 +11654,38 @@ app.get('/api/orders/:orderId', async (req, res) => {
             mergedOrder.gia_tri_giam_voucher = 0;
             mergedOrder.tong_thanh_toan = 0;
             
+            // Collect all statuses
+            const allStatuses = [];
+            
             for (let splitOrder of splitOrdersResult.recordset) {
                 mergedOrder.tong_tien_hang += splitOrder.tong_tien_hang || 0;
                 mergedOrder.phi_van_chuyen += splitOrder.phi_van_chuyen || 0;
                 mergedOrder.gia_tri_giam_voucher += splitOrder.gia_tri_giam_voucher || 0;
                 mergedOrder.tong_thanh_toan += splitOrder.tong_thanh_toan || 0;
+                allStatuses.push(splitOrder.trang_thai);
             }
             
-            console.log(`✅ Split order detected: ${order.ma_don_hang}, merged ${allOrderIds.length} orders`);
+            // ✅ Determine final status: all same → use it, different → use worst/lowest
+            const uniqueStatuses = [...new Set(allStatuses)];
+            const statusPriority = {
+                'huy': 0,
+                'cho_xac_nhan': 1,
+                'dang_xu_ly': 2,
+                'dang_giao': 3,
+                'hoan_thanh': 4
+            };
+            
+            if (uniqueStatuses.length === 1) {
+                // All orders have same status
+                mergedOrder.trang_thai = uniqueStatuses[0];
+            } else {
+                // Different statuses - show the lowest/worst one
+                mergedOrder.trang_thai = uniqueStatuses.reduce((worst, current) => {
+                    return statusPriority[current] < statusPriority[worst] ? current : worst;
+                });
+            }
+            
+            console.log(`✅ Split order detected: ${order.ma_don_hang}, merged ${allOrderIds.length} orders, final status: ${mergedOrder.trang_thai}`);
         }
 
         // Lấy items từ TẤT CẢ orders (nếu là split order)

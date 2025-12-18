@@ -1843,16 +1843,30 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Fill form
     if (address) {
       document.getElementById('editAddressId').value = address.id;
-      document.querySelector(`input[name="loai_dia_chi"][value="${address.loai_dia_chi}"]`).checked = true;
-      document.getElementById('formName').value = address.ten_nguoi_nhan;
-      document.getElementById('formPhone').value = address.sdt_nguoi_nhan;
-      document.getElementById('formProvince').value = address.tinh_thanh_id;
-      loadWardsByProvince(address.tinh_thanh_id, 'formWard').then(() => {
-        document.getElementById('formWard').value = address.phuong_xa_id;
-      });
-      document.getElementById('formAddress').value = address.dia_chi_cu_the;
+      
+      // Set loai_dia_chi radio (check if exists first)
+      const loaiDiaChiRadio = document.querySelector(`input[name="loai_dia_chi"][value="${address.loai_dia_chi}"]`);
+      if (loaiDiaChiRadio) {
+        loaiDiaChiRadio.checked = true;
+      }
+      
+      document.getElementById('formName').value = address.ten_nguoi_nhan || '';
+      document.getElementById('formPhone').value = address.sdt_nguoi_nhan || '';
+      document.getElementById('formProvince').value = address.tinh_thanh_id || '';
+      
+      if (address.tinh_thanh_id && address.phuong_xa_id) {
+        loadWardsByProvince(address.tinh_thanh_id, 'formWard').then(() => {
+          document.getElementById('formWard').value = address.phuong_xa_id;
+        });
+      }
+      
+      document.getElementById('formAddress').value = address.dia_chi_cu_the || '';
       document.getElementById('formNote').value = address.ghi_chu || '';
-      document.getElementById('formIsDefault').checked = address.is_default;
+      
+      const isDefaultCheckbox = document.getElementById('formIsDefault');
+      if (isDefaultCheckbox) {
+        isDefaultCheckbox.checked = address.is_default === 1 || address.is_default === true;
+      }
     } else {
       document.getElementById('addressForm').reset();
       document.getElementById('editAddressId').value = '';
