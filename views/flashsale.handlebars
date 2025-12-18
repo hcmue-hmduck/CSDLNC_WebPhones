@@ -2184,6 +2184,18 @@ document.addEventListener('DOMContentLoaded', function() {
         selectAllVariants?.addEventListener('change', handleSelectAllVariants);
         addSelectedVariants?.addEventListener('click', addVariantsToList);
 
+        // Vùng selection - reload products khi thay đổi vùng (học từ voucher)
+        vungIdSelect?.addEventListener('change', () => {
+            console.log('🔄 Region changed, reloading products...');
+            // Clear current selections
+            productSelect.innerHTML = '<option value="">-- Chọn sản phẩm để xem variants --</option>';
+            variantsSection.style.display = 'none';
+            currentProduct = null;
+            currentProductVariants = [];
+            // Reload products for new region
+            loadProducts();
+        });
+
         // Form submission
         form?.addEventListener('submit', saveFlashSale);
     }
@@ -2274,18 +2286,69 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function loadProducts() {
         try {
-            const response = await fetch('/api/sanpham');
-            if (!response.ok) throw new Error('Failed to load products');
+            // Lấy vùng của flash sale (học từ voucher)
+            const vungId = document.getElementById('vungId')?.value;
+            
+            if (!vungId) {
+                console.warn('⚠️ Flash sale region not selected');
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Cảnh báo',
+                    text: 'Vui lòng chọn vùng cho flash sale trước'
+                });
+                return;
+            }
+            
+            console.log('🔄 Loading products for region:', vungId);
+            
+            // Gọi API với filter theo vùng (học từ voucher)
+            const response = await fetch(`/api/sanpham?vung_id=${vungId}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('❌ API Error:', response.status, errorText);
+                throw new Error(`API returned ${response.status}: ${errorText}`);
+            }
             
             const data = await response.json();
-            const products = data.data?.sanphams || data.sanphams || data;
+            console.log('📥 API Response:', data);
+            
+            // Parse products array (học từ voucher)
+            let products = [];
+            if (data.success && data.data?.sanphams) {
+                products = data.data.sanphams;
+            } else if (data.sanphams) {
+                products = data.sanphams;
+            } else if (Array.isArray(data)) {
+                products = data;
+            } else {
+                throw new Error('Invalid API response format');
+            }
+            
+            if (!Array.isArray(products)) {
+                throw new Error('Products is not an array');
+            }
+            
+            // Filter products: chỉ lấy products có variants cho vùng này (học từ voucher)
+            const filteredProducts = products.filter(product => {
+                const variants = product.variants || [];
+                return variants.some(v => v.site_origin === vungId);
+            });
+            
+            console.log('🌍 Flash sale region:', vungId);
+            console.log('📦 Total products:', products.length);
+            console.log('✅ Products with variants in region:', filteredProducts.length);
             
             productSelect.innerHTML = '<option value="">-- Chọn sản phẩm để xem variants --</option>';
             
-            products.forEach(product => {
+            if (filteredProducts.length === 0) {
+                productSelect.innerHTML = '<option value="">Không có sản phẩm nào cho vùng này</option>';
+                return;
+            }
+            
+            filteredProducts.forEach(product => {
                 const option = document.createElement('option');
                 option.value = product.id;
-                option.textContent = `${product.ten_san_pham} (${product.ma_sku || 'N/A'})`;
+                option.textContent = `${product.ten_san_pham} (${product.ma_san_pham})`;
                 option.dataset.product = JSON.stringify(product);
                 productSelect.appendChild(option);
             });
