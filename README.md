@@ -20,7 +20,7 @@
 
 ---
 
-## 🏗️ Kiến Trúc Hệ Thống (Hybrid Architecture)
+## Kiến Trúc Hệ Thống (Hybrid Architecture)
 
 Dự án sử dụng mô hình lưu trữ kết hợp (Hybrid Storage) để tối ưu hóa hiệu năng và tính nhất quán của dữ liệu:
 
@@ -41,29 +41,29 @@ WebBanSmartPhones/
 
 ---
 
-## 💎 Tính Năng Chủ Chốt
+## Tính Năng Chủ Chốt
 
-### ⚡ Hệ Thống Flash Sale Thời Gian Thực
+### Hệ Thống Flash Sale Thời Gian Thực
 - **Dynamic Status**: Tự động cập nhật trạng thái sự kiện (Đang diễn ra, Sắp diễn ra, Đã kết thúc).
 - **Variant Binding**: Link trực tiếp biến thể từ SQL vào sự kiện Flash Sale trên MongoDB.
 - **Stock Guard**: Kiểm soát số lượng bán ra và giới hạn mua của từng khách hàng.
 
-### 🗺️ Quản Lý Đa Vùng (Multi-Region)
+### Quản Lý Đa Vùng (Multi-Region)
 - **Region Switching**: Admin có thể quản lý kho hàng và đơn hàng theo từng vùng (Bắc, Trung, Nam).
 - **Connection Pooling**: Tối ưu hóa kết nối SQL Server riêng biệt cho từng khu vực để đảm bảo tốc độ truy xuất.
 
-### 📦 Quản Lý Sản Phẩm & Biến Thể
+### Quản Lý Sản Phẩm & Biến Thể
 - **Variant Engine**: Hỗ trợ nhiều phiên bản (Màu sắc, Dung lượng) với giá và tồn kho riêng biệt.
 - **Cloudinary Integration**: Tự động upload và tối ưu hóa hình ảnh/video sản phẩm lên mây.
 - **Rich Specs**: Lưu trữ thông số kỹ thuật chi tiết không giới hạn nhờ sự linh hoạt của MongoDB.
 
-### 🔐 Bảo Mật & Quản Trị
+### Bảo Mật & Quản Trị
 - **RBAC (Role-Based Access Control)**: Phân quyền đa cấp (User, Admin, Super Admin).
 - **Session Management**: Duy trì phiên làm việc an toàn, tích hợp bảo mật Cookie.
 
 ---
 
-## 💻 Tech Stack
+## Tech Stack
 
 ### Backend Powerhouse
 - **Framework**: Express.js 5.x (Next-gen Express).
@@ -80,15 +80,15 @@ WebBanSmartPhones/
 
 ---
 
-## 🚀 Hướng Dẫn Cài Đặt
+## Hướng Dẫn Cài Đặt
 
-### 🛠️ Yêu cầu tiền đề
+### Yêu cầu tiền đề
 - **Node.js**: Phiên bản 18+ hoặc 20+.
 - **Database**: 
   - SQL Server (Local hoặc Azure).
   - MongoDB (Local hoặc Atlas).
 
-### ⚙️ Các bước thực hiện
+### Các bước thực hiện
 
 1. **Clone project và cài đặt thư viện**:
    ```bash
